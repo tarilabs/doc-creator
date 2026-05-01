@@ -41,7 +41,25 @@ JIRA_TOKEN=your-api-token
 
 The `.env` file is gitignored. If any of the three variables is missing, the scripts exit with code 2.
 
-## Usage
+## JIRA Exploration
+
+Given a single issue key, explores the JIRA hierarchy to build a complete picture of a strategy and its implementation:
+
+- Walks up the parent chain to find the owning RHAISTRAT
+- Downloads the STRAT, its children, and filtered linked issues as individual markdown files
+- Collects PR URLs from engineering tasks under Epic children, using optimized batch JQL calls to minimize API round-trips
+- Writes a manifest (`artifacts/jiraexploration.md`) with YAML frontmatter summarizing the hierarchy, PR URLs, and starting issue description
+
+```bash
+python scripts/jira_exploration.py RHOAIENG-53404
+python scripts/jira_exploration.py RHAISTRAT-1084 --link-filter RHOAI
+```
+
+Output: `artifacts/jiraexploration/` with one `{KEY}.md` per issue and a manifest at `artifacts/jiraexploration.md`.
+
+For architecture details and design rationale, see [docs/jiraexploration.md](docs/jiraexploration.md).
+
+## Low-level usage
 
 Fetch a single issue as JSON:
 
@@ -55,10 +73,10 @@ Fetch with markdown-converted description:
 python scripts/fetch_issue.py RHAISTRAT-123 --markdown
 ```
 
-Fetch all artifacts (description, comments, attachments, linked issues) to disk:
+Fetch an issue and all linked/child issues as markdown:
 
 ```bash
-python scripts/fetch_issue.py RHAISTRAT-123 --fetch-all artifacts/
+python scripts/fetch_issue.py RHAISTRAT-123 --fetch-all artifacts/jiraexploration
 ```
 
 ## Tests
