@@ -106,13 +106,13 @@ The first run also suffered from the orchestrator compressing the ~5KB documenta
 
 ## Results: before and after
 
-| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) |
-|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|
-| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) |
-| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) |
-| Noise | 0 | 0 | 0 | 0 | 1 (5%) |
-| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered |
-| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) |
+| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) | Sixth run (v2, 22 PRs, batched) |
+|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|--------------------------------|
+| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) | 12 (55%) |
+| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) | 6 (27%) |
+| Noise | 0 | 0 | 0 | 0 | 1 (5%) | 4 (18%) |
+| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered | not triggered |
+| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) | 2 (both justified) |
 
 The second run's 6 peripheral PRs: Cypress tests (#7126), test verification (#1285), UX polish (#7131), route refactoring (#7072), review follow-up (#7082), and YAML simplification (#7063). All correctly identified as not changing what documentation would say.
 
@@ -121,6 +121,14 @@ The third run (different PR set, 23 PRs from RHAISTRAT-1084) produced 3 peripher
 The fourth run (22 PRs, same JIRA source) produced the healthiest distribution: 68% relevant, 32% peripheral. Hint override rate dropped to 3 of 8 (vs 6 of 8 in run 2), suggesting subagents are calibrating better — accepting the peripheral hint when the fix genuinely restores existing behavior (#2367 sort fix, #2432 YAML data flow, #2442 sort-by-name) while still overriding when the "fix" introduces new documented capability (#2433 sourceLabel filtering, #2461 securityIndicators, #7021 URL display behavior). The 7 peripheral PRs: sort fix (#2367), YAML data fix (#2432), sort-by-name fix (#2442), route refactoring (#7072), review follow-up (#7082), Cypress tests (#7126), test verification (#1285).
 
 The fifth run (22 PRs, same JIRA source) used the new `pr_context_report.py` script for Step 7 instead of orchestrator-built reports. Results: 16 relevant (73%), 5 peripheral (23%), 1 noise (5%) — the first run to produce a noise verdict (#7072, internal route utility refactor). The 4 hint overrides (#2432 tool metadata, #2433 sourceLabel filtering, #2461 securityIndicators, #7021 URL display behavior) were all justified: these `fix(`-prefixed PRs implement or enable spec-required capabilities. Notably, #2432 flipped from peripheral (run 4) to relevant (run 5) — the subagent correctly identified that preserving `accessType` and `parameters` fields is a core catalog metadata requirement, not a bug fix.
+
+The sixth run (22 PRs, same JIRA source) was the first run with subagent batching (Option B). Results: 12 relevant (55%), 6 peripheral (27%), 4 noise (18%) — the healthiest distribution yet and the first run where noise exceeded a single PR. The 4 noise verdicts: UI microcopy (#2420), route refactoring (#7072), Cypress tests (#7126), and test verification (#1285). Only 2 hint overrides (#2432 and #2433), both justified — they implement new API behavior despite `fix(` prefix. The lower override count (2 vs 4 in run 5) suggests batched subagents are slightly more conservative, which is appropriate: #2461 (securityIndicators) was correctly classified as peripheral this time (internal YAML field reorganization, no API surface change), and #7021 (URL truncation fix) was also correctly peripheral.
+
+Observations specific to the batching implementation:
+- **Orchestrator launched 4 of 5 batches, then 1 separately.** This was an orchestrator mistake — the skill says "launch ALL batch subagents in a SINGLE message" but the orchestrator split across two messages. The fifth batch launched only after a completion notification arrived for batch 1. Net effect: batch 5 started ~60s later than it should have. This suggests that "single message" is necessary but not sufficient — the orchestrator still needs to count its batches and verify all are included before sending.
+- **YAML frontmatter quoting fragility.** One subagent (batch 2) wrote `title: fix(catalog): populate securityIndicators...` without quoting the value. The colon after `fix(catalog)` broke YAML parsing in the verdict check script. This is the first time a subagent produced invalid frontmatter — prior runs always quoted titles with colons. The prompt template's frontmatter example should explicitly show quoted values for string fields that may contain colons.
+- **Wall-clock time.** Steps 1-3 (deterministic): ~10s. Subagent dispatch + execution: ~65s from first launch to last completion (would have been ~50s if all 5 batches launched together). Steps 6-7: ~5s. Total: ~80s. Compared to pre-batching runs where 22 sequential subagents took ~15 minutes, and theoretical best-case of ~35s estimated in the Option B analysis.
+- **Spawn latency still perceptible.** Even with 5 Agent calls instead of 22, the user observes visible per-call pauses during dispatch. The improvement is significant in total time (80s vs 15min) but the UX of watching 5 sequential spawns is still noticeably slower than the deterministic script phases.
 
 ## Testing strategy
 
@@ -309,7 +317,8 @@ Replace Agent tool calls entirely with a Python script that launches N `claude` 
 Potential directions discussed but not yet implemented:
 
 - ~~**Report script (`pr_context_report.py`)**~~ — **done** (run 5). Reads YAML frontmatter from summary files, generates the markdown verdict table, and appends flags from verdict check. The orchestrator calls the script and relays output — zero file reads, zero content parsing.
-- ~~**Subagent batching**~~ — **done**. Prompt template and skill rewritten to batch ~4-5 PRs per Agent call (see Option B above). Reduces dispatch from ~22 calls to ~5.
+- ~~**Subagent batching**~~ — **done** (run 6). Prompt template and skill rewritten to batch ~4-5 PRs per Agent call (see Option B above). Reduces dispatch from ~22 calls to ~5.
+- **YAML frontmatter quoting enforcement** — add explicit quoting examples to the prompt template's frontmatter spec (`title: "..."`, `gist: "..."`), or add a post-processing script that validates/fixes frontmatter before downstream consumption. Run 6 surfaced the first parsing failure from an unquoted colon in a title field.
 - **Cypress/E2E test glob expansion** — the current `TEST_GLOBS` miss Cypress-style paths (`packages/cypress/cypress/*.ts`), causing test-only PRs like #7126 to pass through to LLM evaluation without a hint
 - **Verdict confidence scoring** — the comparative evaluation produces reasoning; a second pass could score confidence (high/medium/low) based on how close the peripheral vs relevant arguments are
 - **Cross-PR deduplication** — PRs that implement the same feature incrementally (e.g., #6747 adds mock endpoints, #6990 replaces them with real ones) could be grouped to avoid redundant documentation impact bullets
