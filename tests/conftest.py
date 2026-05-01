@@ -100,7 +100,7 @@ def jira(jira_emu):
 
         @staticmethod
         def create(key, summary, description, labels=None, components=None,
-                   git_pull_request=None):
+                   git_pull_request=None, parent_key=None):
             """Import an issue with a specific key."""
             issue = {
                 "key": key,
@@ -115,6 +115,8 @@ def jira(jira_emu):
                 issue["components"] = [{"name": c} for c in components]
             if git_pull_request is not None:
                 issue["customfield_10875"] = git_pull_request
+            if parent_key is not None:
+                issue["epic_link"] = parent_key
             _jira_request(jira_emu, "POST", "/api/admin/import",
                           {"issues": [issue]})
 
