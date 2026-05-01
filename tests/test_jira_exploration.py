@@ -95,3 +95,47 @@ class TestJiraExploration:
         assert "no RHAISTRAT ancestor" in text
         assert "RHOAIENG-901 → RHOAIENG-900" in text
         assert "Child description" in text
+
+    def test_collects_pr_urls_from_epic_grandchildren(self, jira, art_dir):
+        """PR URLs from Epic grandchildren are collected in the manifest."""
+        pr_adf = {
+            "type": "doc", "version": 1,
+            "content": [{"type": "paragraph", "content": [
+                {"type": "inlineCard", "attrs": {
+                    "url": "https://github.com/org/repo/pull/10"}},
+            ]}],
+        }
+        desc_with_pr = (
+            "See https://github.com/org/other-repo/pull/20 for details.")
+
+        jira.create("RHAISTRAT-400", "Strategy with Epics",
+                     "Top-level strategy.")
+        jira.create("RHOAIENG-410", "Eng Epic",
+                     "Engineering work.", issue_type="Epic",
+                     parent_key="RHAISTRAT-400")
+        jira.create("RHOAIENG-411", "Task with PR field",
+                     "Task description.",
+                     parent_key="RHOAIENG-410",
+                     git_pull_request=pr_adf)
+        jira.create("RHOAIENG-412", "Task with PR in description",
+                     desc_with_pr,
+                     parent_key="RHOAIENG-410")
+        jira.create("RHOAIENG-413", "Task with no PRs",
+                     "Nothing here.",
+                     parent_key="RHOAIENG-410")
+
+        output_dir = str(art_dir / "artifacts" / "jiraexploration")
+        manifest = str(art_dir / "artifacts" / "jiraexploration.md")
+        result = _run_explore(jira, "RHAISTRAT-400", output_dir)
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        with open(manifest, encoding="utf-8") as f:
+            text = f.read()
+
+        assert "## Pull Requests" in text
+        assert "https://github.com/org/repo/pull/10" in text
+        assert "https://github.com/org/other-repo/pull/20" in text
+        assert "RHOAIENG-411" in text
+        assert "RHOAIENG-412" in text
+        # Task with no PRs should not appear in the PR section
+        assert "RHOAIENG-413" not in text.split("## Pull Requests")[1]

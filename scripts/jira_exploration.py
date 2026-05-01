@@ -67,13 +67,25 @@ def _collect_strat_prs(strat_key, output_dir, server, user, token):
     log.info("Found %d Epic children: %s", len(epic_keys),
              ", ".join(epic_keys))
 
-    # 2. Batch-fetch all grandchildren with PRs + descriptions (1 JQL call)
-    jql = f"parent in ({','.join(epic_keys)}) ORDER BY key ASC"
-    grandchildren = search_issues(
-        server, user, token, jql,
-        fields=["summary", "description", FIELD_GIT_PULL_REQUEST],
-        max_results=500)
-    log.info("Fetched %d grandchildren across all Epics", len(grandchildren))
+    # 2. Batch-fetch all grandchildren with PRs + descriptions
+    gc_fields = ["summary", "description", FIELD_GIT_PULL_REQUEST]
+    grandchildren = []
+    try:
+        jql = f"parent in ({','.join(epic_keys)}) ORDER BY key ASC"
+        grandchildren = search_issues(server, user, token, jql,
+                                      fields=gc_fields, max_results=500)
+        log.info("Fetched %d grandchildren in 1 batch call", len(grandchildren))
+    except Exception:
+        log.warning("Batch parent-in query not supported, falling back to "
+                    "per-Epic queries")
+        for ek in epic_keys:
+            batch = search_issues(
+                server, user, token,
+                f"parent = {ek} ORDER BY key ASC",
+                fields=gc_fields, max_results=200)
+            grandchildren.extend(batch)
+        log.info("Fetched %d grandchildren across %d Epic queries",
+                 len(grandchildren), len(epic_keys))
 
     # 3. Extract PR URLs from each grandchild
     results = []

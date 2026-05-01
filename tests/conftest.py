@@ -100,13 +100,14 @@ def jira(jira_emu):
 
         @staticmethod
         def create(key, summary, description, labels=None, components=None,
-                   git_pull_request=None, parent_key=None):
+                   git_pull_request=None, parent_key=None,
+                   issue_type="Feature Request"):
             """Import an issue with a specific key."""
             issue = {
                 "key": key,
                 "summary": summary,
                 "project": key.split("-")[0],
-                "issue_type": "Feature Request",
+                "issue_type": issue_type,
                 "description": description,
             }
             if labels:
