@@ -299,7 +299,7 @@ requires-dist = [{ name = "pyyaml" }]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "jira-emulator", git = "https://github.com/tarilabs/jira-emulator.git?rev=tarilabs-20260501-remoteLinkAndCustomFieldsImport" },
+    { name = "jira-emulator", git = "https://github.com/jctanner/jira-emulator.git" },
     { name = "pytest" },
 ]
 
@@ -491,7 +491,7 @@ wheels = [
 [[package]]
 name = "jira-emulator"
 version = "0.1.0"
-source = { git = "https://github.com/tarilabs/jira-emulator.git?rev=tarilabs-20260501-remoteLinkAndCustomFieldsImport#46909fa749706a309d2e5cbc296af4dc58bcf3e7" }
+source = { git = "https://github.com/jctanner/jira-emulator.git#0d70e18d59c0d766b34d16df09c4437cee057c73" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "bcrypt" },

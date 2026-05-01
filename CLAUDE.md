@@ -85,7 +85,7 @@ Do not use MCP servers. Use helper scripts in `scripts/` instead. Scripts are te
 Tests use [jira-emulator](https://github.com/jctanner/jira-emulator) — no real JIRA credentials needed. LLM-dependent tests are marked `@pytest.mark.llm` and excluded from fast CI with `-m 'not llm'`.
 
 ```bash
-uv run pytest tests/ -v --tb=short           # all tests except LLM
+uv run pytest tests/ -v --tb=short -m 'not llm'  # all tests except LLM
 uv run pytest tests/ -v -m llm               # LLM tests only
 ```
 
