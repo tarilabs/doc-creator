@@ -82,8 +82,28 @@ def api_call_with_retry(server, path, user, token, body=None, method=None,
     raise last_error
 
 
+def _load_dotenv():
+    """Load .env file from the repo root if it exists. Never overrides
+    variables already set in the environment."""
+    env_path = os.path.join(os.getcwd(), ".env")
+    try:
+        with open(env_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip("\"'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except FileNotFoundError:
+        pass
+
+
 def require_env():
     """Read and validate Jira env vars. Returns (server, user, token)."""
+    _load_dotenv()
     server = os.environ.get("JIRA_SERVER")
     user = os.environ.get("JIRA_USER")
     token = os.environ.get("JIRA_TOKEN")

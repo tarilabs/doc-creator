@@ -68,31 +68,24 @@ class TestFetchIssue:
         assert "priority" not in output["fields"]
         assert "status" not in output["fields"]
 
-    def test_missing_credentials_exits_with_error(self, jira):
+    def test_missing_credentials_exits_with_error(self, jira, tmp_path):
         env = {k: v for k, v in os.environ.items()
                if k not in ("JIRA_SERVER", "JIRA_USER", "JIRA_TOKEN")}
 
-        result = _run(jira, ["RHAIRFE-2000"], env_override=env)
+        result = _run(jira, ["RHAIRFE-2000"], env_override=env, cwd=str(tmp_path))
         assert result.returncode != 0
 
     def test_fetch_all_writes_artifact_files(self, jira, art_dir):
         jira.create("RHAIRFE-2003", "Fetch-all target",
                      "Description for fetch-all test.")
 
-        artifacts = str(art_dir / "artifacts")
-        result = _run(jira, ["RHAIRFE-2003", "--fetch-all", artifacts],
+        output_dir = str(art_dir / "artifacts" / "jiraexploration")
+        result = _run(jira, ["RHAIRFE-2003", "--fetch-all", output_dir],
                        cwd=PROJECT_ROOT)
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        task_file = os.path.join(artifacts, "rfe-tasks", "RHAIRFE-2003.md")
-        assert os.path.isfile(task_file)
-
-        orig_file = os.path.join(artifacts, "rfe-originals", "RHAIRFE-2003.md")
-        assert os.path.isfile(orig_file)
-
-        comments_file = os.path.join(
-            artifacts, "rfe-tasks", "RHAIRFE-2003-comments.md")
-        assert os.path.isfile(comments_file)
+        issue_file = os.path.join(output_dir, "RHAIRFE-2003.md")
+        assert os.path.isfile(issue_file)
 
     def test_fetch_all_missing_credentials_exits_2(self, jira, art_dir):
         env = {k: v for k, v in os.environ.items()

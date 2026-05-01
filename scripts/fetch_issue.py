@@ -130,142 +130,53 @@ def _fetch_attachments(attachments, issue_key, artifacts_dir, user, token):
         print(f"  {count} attachment(s) saved to {att_dir}", file=sys.stderr)
 
 
-def _fetch_linked_issues(issuelinks, issue_key, artifacts_dir,
-                         server, user, token):
-    """Fetch summary + description from linked issues (one level deep)."""
-    if not issuelinks:
-        return
-    tasks_dir = os.path.join(artifacts_dir, "rfe-tasks")
-    os.makedirs(tasks_dir, exist_ok=True)
-    links_path = os.path.join(tasks_dir, f"{issue_key}-links.md")
+def _write_issue_md(issue_key, output_dir, server, user, token, written):
+    """Fetch a single issue and write it as {KEY}.md. Returns issuelinks."""
+    if issue_key in written:
+        return []
+    written.add(issue_key)
 
-    sections = []
-    for link in issuelinks:
-        link_type = link.get("type", {}).get("name", "Related")
-        inward = link.get("inwardIssue")
-        outward = link.get("outwardIssue")
-        linked = inward or outward
-        if not linked:
-            continue
-        linked_key = linked.get("key", "")
-        direction = "inward" if inward else "outward"
-        relation = link.get("type", {}).get(direction, link_type)
+    try:
+        issue = get_issue(server, user, token, issue_key,
+                          fields=["summary", "description", "issuelinks"])
+    except Exception as e:
+        print(f"  Error fetching {issue_key}: {e}", file=sys.stderr)
+        return []
 
-        try:
-            linked_issue = get_issue(server, user, token, linked_key,
-                                     fields=["summary", "description"])
-            fields = linked_issue.get("fields", {})
-            summary = fields.get("summary", "")
-            desc_md = _desc_to_markdown(fields.get("description"))
-            sections.append(
-                f"## {linked_key}: {summary}\n\n"
-                f"**Relationship**: {relation}\n\n"
-                f"{desc_md}\n"
-            )
-            print(f"  Fetched linked issue: {linked_key} ({relation})",
-                  file=sys.stderr)
-        except Exception as e:
-            sections.append(
-                f"## {linked_key}\n\n"
-                f"**Relationship**: {relation}\n\n"
-                f"Error fetching: {e}\n"
-            )
-            print(f"  Error fetching linked {linked_key}: {e}",
-                  file=sys.stderr)
+    fields = issue.get("fields", {})
+    summary = fields.get("summary", "")
+    desc_md = _desc_to_markdown(fields.get("description"))
 
-    if sections:
-        with open(links_path, "w", encoding="utf-8") as f:
-            f.write(f"# Linked Issues: {issue_key}\n\n")
-            f.write("\n".join(sections))
-        print(f"  {len(sections)} linked issue(s) saved to {links_path}",
-              file=sys.stderr)
+    md_path = os.path.join(output_dir, f"{issue_key}.md")
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(f"# {issue_key}: {summary}\n\n")
+        f.write(desc_md + "\n")
+
+    print(f"  Wrote {md_path}", file=sys.stderr)
+    return fields.get("issuelinks", [])
 
 
-def _fetch_all(issue_key, artifacts_dir, server, user, token):
-    """Fetch issue and write all artifact files.
+def _fetch_all(issue_key, output_dir, server, user, token):
+    """Fetch issue and all linked issues, write each as its own markdown file.
 
     Returns 0 on success, 1 on error.
     """
-    tasks_dir = os.path.join(artifacts_dir, "rfe-tasks")
-    originals_dir = os.path.join(artifacts_dir, "rfe-originals")
-    os.makedirs(tasks_dir, exist_ok=True)
-    os.makedirs(originals_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    written = set()
 
-    # Fetch issue fields (including attachments and links for context)
-    try:
-        issue = get_issue(server, user, token, issue_key,
-                          fields=["summary", "description", "priority",
-                                  "labels", "status", "attachment",
-                                  "issuelinks"])
-    except Exception as e:
-        print(f"Error fetching issue {issue_key}: {e}", file=sys.stderr)
+    issuelinks = _write_issue_md(issue_key, output_dir,
+                                 server, user, token, written)
+    if issue_key not in written:
         return 1
 
-    fields = issue.get("fields", {})
-    desc_md = _desc_to_markdown(fields.get("description"))
+    for link in issuelinks:
+        linked = link.get("inwardIssue") or link.get("outwardIssue")
+        if not linked:
+            continue
+        linked_key = linked.get("key", "")
+        _write_issue_md(linked_key, output_dir, server, user, token, written)
 
-    # Extract field values
-    summary = fields.get("summary", "")
-    priority_obj = fields.get("priority")
-    priority = priority_obj.get("name", "Major") if isinstance(
-        priority_obj, dict) else "Major"
-    labels = fields.get("labels", [])
-    labels_str = ",".join(labels) if labels else "null"
-
-    # Write task file with YAML frontmatter + description body
-    task_path = os.path.join(tasks_dir, f"{issue_key}.md")
-    with open(task_path, "w", encoding="utf-8") as f:
-        f.write("---\n")
-        f.write(f"rfe_id: {issue_key}\n")
-        f.write(f"title: \"{summary}\"\n")
-        f.write(f"priority: {priority}\n")
-        f.write("status: Ready\n")
-        f.write(f"original_labels: {labels_str}\n")
-        f.write("---\n\n")
-        f.write(desc_md + "\n")
-
-    # Write original description (deterministic baseline for conflict
-    # detection)
-    orig_path = os.path.join(originals_dir, f"{issue_key}.md")
-    with open(orig_path, "w", encoding="utf-8") as f:
-        f.write(desc_md + "\n")
-
-    # Fetch and write comments
-    try:
-        comments = get_comments(server, user, token, issue_key)
-    except Exception as e:
-        print(f"Error fetching comments for {issue_key}: {e}",
-              file=sys.stderr)
-        return 1
-
-    comments_path = os.path.join(tasks_dir, f"{issue_key}-comments.md")
-    with open(comments_path, "w", encoding="utf-8") as f:
-        f.write(f"# Comments: {issue_key}\n\n")
-        if not comments:
-            f.write("No comments found.\n")
-        else:
-            for c in comments:
-                author = c.get("author", {}).get("displayName", "Unknown")
-                date = _format_comment_date(c.get("created", ""))
-                body = c.get("body", {})
-                if isinstance(body, dict):
-                    body = adf_to_markdown(body).strip()
-                elif body is not None:
-                    body = str(body).strip()
-                else:
-                    body = ""
-                f.write(f"## {author} — {date}\n\n{body}\n\n")
-
-    # Fetch and save text-based attachments
-    attachments = fields.get("attachment", [])
-    _fetch_attachments(attachments, issue_key, artifacts_dir, user, token)
-
-    # Fetch linked issue summaries + descriptions (one level deep)
-    issuelinks = fields.get("issuelinks", [])
-    _fetch_linked_issues(issuelinks, issue_key, artifacts_dir,
-                         server, user, token)
-
-    print(f"OK: wrote {task_path}, {orig_path}, {comments_path}")
+    print(f"OK: wrote {len(written)} issue(s) to {output_dir}")
     return 0
 
 
@@ -283,10 +194,10 @@ def main():
                                  "(default: summary,description,priority,"
                                  "labels,status). "
                                  "Use 'comment' to also fetch comments.")
-    mode_group.add_argument("--fetch-all", metavar="ARTIFACTS_DIR",
-                            help="Fetch issue and write all artifact files "
-                                 "(rfe-tasks, rfe-originals, comments) to "
-                                 "the given directory.")
+    mode_group.add_argument("--fetch-all", metavar="OUTPUT_DIR",
+                            help="Fetch issue and all linked issues, write "
+                                 "each as its own markdown file in the "
+                                 "given directory.")
 
     parser.add_argument("--markdown", action="store_true",
                         help="Convert ADF fields (description, comments) "
