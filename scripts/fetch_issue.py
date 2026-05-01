@@ -157,13 +157,16 @@ def _write_issue_md(issue_key, output_dir, server, user, token, written):
     try:
         issue = get_issue(server, user, token, issue_key,
                           fields=["summary", "description", "issuelinks",
-                                  FIELD_GIT_PULL_REQUEST])
+                                  "issuetype", FIELD_GIT_PULL_REQUEST])
     except Exception as e:
         print(f"  Error fetching {issue_key}: {e}", file=sys.stderr)
         return []
 
     fields = issue.get("fields", {})
     summary = fields.get("summary", "")
+    issue_type_obj = fields.get("issuetype")
+    issue_type = issue_type_obj.get("name", "") if isinstance(
+        issue_type_obj, dict) else ""
     desc_md = _desc_to_markdown(fields.get("description"))
 
     pr_urls = _extract_urls_from_adf(fields.get(FIELD_GIT_PULL_REQUEST))
@@ -187,6 +190,8 @@ def _write_issue_md(issue_key, output_dir, server, user, token, written):
         f.write("---\n")
         f.write(f"jira_key: {issue_key}\n")
         f.write(f"summary: \"{summary}\"\n")
+        if issue_type:
+            f.write(f"issue_type: {issue_type}\n")
         if pr_urls:
             f.write("git_pull_requests:\n")
             for url in pr_urls:
