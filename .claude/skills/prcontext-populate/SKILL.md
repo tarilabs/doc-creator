@@ -7,7 +7,7 @@ description: >
   a pull_requests list.
 disable-model-invocation: true
 compatibility: Requires Python 3.11+ with pyyaml, and gh CLI authenticated. Designed for Claude Code.
-allowed-tools: Bash(python3 *) Read Agent Write
+allowed-tools: Bash(python3 *) Read Skill Write
 ---
 
 ## Step 1 — Fetch PR patches
@@ -66,73 +66,45 @@ artifacts/
 `{file}` matches the `file` field in each manifest entry
 (e.g. `kubeflow__model-registry__2367`).
 
-## Step 4 — Prepare subagent context
+## Step 4 — Prepare reviewer invocations
 
 Read the manifest at `artifacts/prcontext.md` (or the custom
 output directory).
 
-Resolve the following **absolute paths** (needed for subagent prompts):
-- `{documentation_target_file}` — absolute path to `artifacts/jiracontext.md`
-- `{output_dir}` — absolute path to `artifacts/prcontext`
+Resolve the following **absolute paths** (needed for reviewer args):
+- `{target}` — absolute path to `artifacts/jiracontext.md`
+- `{dir}` — absolute path to `artifacts/prcontext`
 
 From the prcontext manifest YAML frontmatter, collect all entries where
-`status: fetched`. For each entry, note only: `file`, `title`, `url`,
+`status: fetched`. For each entry, note only: `file`, `url`,
 `hint`, `hint_reason`. These are the only fields you need.
 
 Check which filtered patches are empty (0 bytes). For those, directly
 write a summary with `verdict: noise` and a one-line explanation
 ("all changes were filtered as noise"). Remove them from the list
-of entries to summarize.
+of entries to evaluate.
 
 **DO NOT** read `meta.yaml` files, filtered patches, or PR bodies.
-The subagents read those files themselves.
+The reviewers read those files themselves.
 
-### Batching
-
-Group the remaining entries into batches of up to
-`max(1, ceil(N / 5))` entries each, where N is the total number of
-entries to summarize. This targets at most 5 batches. Assign entries
-in manifest order.
-
-For each entry, pre-compute its hint block text:
-- If `hint` is `no-hint` or absent: `"(none)"`
+For each remaining entry, compute its hint text:
+- If `hint` is `no-hint` or absent: `none`
 - If `hint` is `candidate-peripheral`: `"DETERMINISTIC HINT: This PR's metadata suggests it is peripheral (reason: {hint_reason}). Evaluate this critically — override if the PR genuinely changes documented behavior."`
 - If `hint` is `candidate-noise`: `"DETERMINISTIC HINT: This PR's metadata suggests it is noise (reason: {hint_reason}). Evaluate this critically."`
 
-For each batch, build a `{pr_entries}` text block by repeating this
-structure for each entry in the batch (derive `repo` and `pr_number`
-from the URL):
+## Step 5 — Dispatch PR reviewers
+
+For each entry from Step 4, invoke the `pr-reviewer` skill:
 
 ```
-### PR {i} of {batch_size}
-- pr_title: "{title}"
-- pr_url: {url}
-- repo: {repo}
-- pr_number: {pr_number}
-- meta_yaml_path: {output_dir}/raw/{file}.meta.yaml
-- filtered_patch_path: {output_dir}/filtered/{file}.patch
-- output_file: {output_dir}/{file}.md
-- hint_block: {hint_block_text}
+/pr-reviewer --target {target} --dir {dir} --key {file} --url {url} --hint {hint_text}
 ```
 
-## Step 5 — Summarize PR batches
-
-Read the prompt template from [prompt-template.md](prompt-template.md).
-
-For each batch from Step 4, spawn an Agent subagent with
-**model: haiku**. Fill in two placeholders:
-
-- `{documentation_target_file}` — the absolute path to jiracontext.md
-- `{pr_entries}` — the batch's pre-built text block from Step 4
-
-**CRITICAL — launch ALL batch subagents in a SINGLE message.** Send
-one message containing one Agent tool call per batch. Do NOT wait for
-any subagent to complete before launching others.
+Invoke ALL pr-reviewer skills in a SINGLE message.
 
 **DO NOT** reason about PR content, titles, or verdicts. Verdict
-judgment is the subagent's job. Your job is mechanical: build the
-`{pr_entries}` blocks, fill the template, launch all batch subagents
-at once.
+judgment is the reviewer's job. Your job is mechanical: compute the
+arguments and dispatch all reviewers.
 
 ## Step 6 — Verdict sanity check
 

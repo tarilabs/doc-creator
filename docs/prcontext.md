@@ -106,13 +106,13 @@ The first run also suffered from the orchestrator compressing the ~5KB documenta
 
 ## Results: before and after
 
-| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) | Sixth run (v2, 22 PRs, batched) |
-|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|--------------------------------|
-| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) | 12 (55%) |
-| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) | 6 (27%) |
-| Noise | 0 | 0 | 0 | 0 | 1 (5%) | 4 (18%) |
-| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered | not triggered |
-| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) | 2 (both justified) |
+| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) | Sixth run (v2, 22 PRs, batched) | Seventh run (22 PRs, Skill dispatch) |
+|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|--------------------------------|--------------------------------------|
+| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) | 12 (55%) | 12 (55%) |
+| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) | 6 (27%) | 8 (36%) |
+| Noise | 0 | 0 | 0 | 0 | 1 (5%) | 4 (18%) | 2 (9%) |
+| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered | not triggered | not triggered |
+| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) | 2 (both justified) | 2 (both justified) |
 
 The second run's 6 peripheral PRs: Cypress tests (#7126), test verification (#1285), UX polish (#7131), route refactoring (#7072), review follow-up (#7082), and YAML simplification (#7063). All correctly identified as not changing what documentation would say.
 
@@ -129,6 +129,32 @@ Observations specific to the batching implementation:
 - **YAML frontmatter quoting fragility.** One subagent (batch 2) wrote `title: fix(catalog): populate securityIndicators...` without quoting the value. The colon after `fix(catalog)` broke YAML parsing in the verdict check script. This is the first time a subagent produced invalid frontmatter — prior runs always quoted titles with colons. The prompt template's frontmatter example should explicitly show quoted values for string fields that may contain colons.
 - **Wall-clock time.** Steps 1-3 (deterministic): ~10s. Subagent dispatch + execution: ~65s from first launch to last completion (would have been ~50s if all 5 batches launched together). Steps 6-7: ~5s. Total: ~80s. Compared to pre-batching runs where 22 sequential subagents took ~15 minutes, and theoretical best-case of ~35s estimated in the Option B analysis.
 - **Spawn latency still perceptible.** Even with 5 Agent calls instead of 22, the user observes visible per-call pauses during dispatch. The improvement is significant in total time (80s vs 15min) but the UX of watching 5 sequential spawns is still noticeably slower than the deterministic script phases.
+
+The seventh run (22 PRs, same JIRA source) switched from Agent-based batching to individual Skill tool invocations (`/pr-reviewer` per PR). Results: 12 relevant (55%), 8 peripheral (36%), 2 noise (9%). The relevant count matches run 6 exactly, but the peripheral/noise distribution shifted — 8 peripheral vs 6 in run 6, 2 noise vs 4 in run 6. Two PRs moved from noise to peripheral: #2420 (microcopy — run 6 noise, run 7 peripheral) and #7126 (Cypress tests — run 6 noise, run 7 noise). The 2 hint overrides (#2432 and #2433) are the same as run 6, both justified. The YAML frontmatter quoting bug recurred — `title: feat(mcp-deployments): microcopy...` broke the verdict check script, requiring a manual fix before Step 6 could run.
+
+Observations specific to the Skill dispatch model:
+- **Concurrent dispatch, serial collection.** All 22 Skill invocations were sent in a single message. The framework launched each as "forked execution" — they ran concurrently. But results serialized back into the response: each skill's output appeared one after another. The orchestrator could not proceed to Step 6 until all 22 had returned. From the user's perspective, dispatch was fast (no inter-invocation lag) but overall execution was sequential.
+- **Skill vs Agent dispatch trade-off.** The Skill tool dispatches faster per-call than the Agent tool (lower overhead — no process spawn, no separate context initialization). This explains the user's observation of "much less lag" between invocations. But the Skill tool doesn't offer `run_in_background` — results must be collected before the orchestrator can continue. The Agent tool with `run_in_background: true` allows the orchestrator to dispatch and immediately move on, though in practice it still has to wait for all completions before Step 6.
+- **No batching.** Each PR got its own dedicated Skill invocation rather than being batched with others. This means 22 independent LLM evaluations, each reading the full `jiracontext.md` target spec. More isolated (zero cross-PR contamination risk) but more total LLM calls.
+- **YAML quoting still unfixed.** Same frontmatter parsing failure as run 6. The prompt template still doesn't show quoted examples for fields that may contain colons. This is now a two-run regression — it should be fixed before run 8.
+
+### Dispatch model comparison (runs 6 vs 7)
+
+| Aspect | Run 6 (Agent batching) | Run 7 (Skill per-PR) |
+|--------|----------------------|---------------------|
+| Tool used | Agent (5 calls × ~4 PRs) | Skill (22 calls × 1 PR) |
+| Dispatch mechanism | `run_in_background: true` | Forked execution |
+| Inter-dispatch lag | ~1-2s per Agent call | Negligible (all in one message) |
+| Cross-PR contamination | Possible within batch | None |
+| Total LLM evaluations | 5 (batched) | 22 (individual) |
+| `jiracontext.md` reads | 5 (once per batch) | 22 (once per PR) |
+| Orchestrator context load | Low (metadata only) | Low (metadata only) |
+| Verdict quality | 12R/6P/4N | 12R/8P/2N |
+| YAML quoting failures | 1 | 1 |
+
+The verdict quality difference is modest and likely within normal LLM variance rather than a systematic effect of the dispatch model. The Skill-based approach trades higher LLM call count and token usage for better isolation and simpler orchestration (no batching logic needed). The Agent-based approach is more token-efficient but requires batch management and carries cross-contamination risk.
+
+The user's key observation — "faster between invocations but sequential overall" — reflects the fundamental difference: Skill tool forking eliminates *dispatch* latency between calls (all sent in one message), but doesn't eliminate *collection* latency (results still serialize). The Agent tool with `run_in_background` has higher *dispatch* latency (per-call overhead) but *collection* is asynchronous (notifications arrive as agents complete, orchestrator doesn't block).
 
 ## Testing strategy
 
