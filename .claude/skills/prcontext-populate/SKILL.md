@@ -50,9 +50,9 @@ Exit 0 = success.
 
 ## Artifact layout
 
-The fetch, filter, and pre-classify scripts produce this directory
-structure (under `artifacts/prcontext/` by default, or the custom
-output directory):
+The fetch, filter, pre-classify, and prepare scripts produce this
+directory structure (under `artifacts/prcontext/` by default, or the
+custom output directory):
 
 ```
 artifacts/
@@ -61,6 +61,7 @@ artifacts/
     raw/{file}.patch           # original patches from gh
     raw/{file}.meta.yaml       # PR metadata (title, body, labels, etc.)
     filtered/{file}.patch      # noise-filtered patches
+    {file}.prompt.md           # per-PR prompt file (written in Step 4)
     {file}.md                  # output summaries (written in Step 5)
     verdict_check.md           # post-hoc sanity check (written in Step 6)
 ```
@@ -68,49 +69,55 @@ artifacts/
 `{file}` matches the `file` field in each manifest entry
 (e.g. `kubeflow__model-registry__2367`).
 
-## Step 4 — Prepare batch prompts
+## Step 4 — Prepare per-PR prompts
 
-Run the prepare script to group PRs into batches and build prompt
-files:
+Run the prepare script to build one prompt file per PR:
 
 ```bash
 python3 scripts/pr_context_prepare.py
 ```
 
-The script writes noise summaries for empty-patch entries, groups
-remaining PRs into ≤5 batches, fills the prompt template, and
-writes one prompt file per batch to `artifacts/prcontext/`.
+The script writes noise summaries for empty-patch entries, fills the
+prompt template for each remaining PR, and writes one prompt file per
+PR to `artifacts/prcontext/`.
 
 It prints a JSON summary to stdout:
 ```json
-{"batches": ["artifacts/prcontext/batch_0.prompt.md", ...], "noise_written": 2}
+{"prompts": ["artifacts/prcontext/org__repo__123.prompt.md", ...], "noise_written": 2}
 ```
 
-Parse the JSON to get the list of batch prompt file paths.
+Parse the JSON to get the list of prompt file paths.
 Exit 0 = success, exit 2 = fatal.
 
-## Step 5 — Summarize PR batches
+## Step 5 — Summarize PRs
 
-For each batch prompt file from Step 4, spawn an Agent subagent
+For each prompt file from Step 4, spawn an Agent subagent
 with **model: haiku**. **Do NOT read the prompt file yourself.** Instead,
 pass a short redirect prompt that tells the agent to read its own file:
 
-> Read {batch_prompt_path} and follow all instructions exactly.
+> Read {prompt_path} and follow all instructions exactly.
 
-where `{batch_prompt_path}` is the absolute path to the batch prompt file.
+where `{prompt_path}` is the absolute path to the prompt file.
 The agent reads the file — not you. This keeps your context lean.
 
-**CRITICAL — launch ALL batch subagents in a SINGLE message.** Send
-one message containing one Agent tool call per batch. Do NOT wait for
-any subagent to complete before launching others.
+**CRITICAL — launch ALL subagents in a SINGLE message.** Send
+one message containing one Agent tool call per prompt file. Do NOT
+wait for any subagent to complete before launching others.
 
 **DO NOT** read prompt file contents, reason about PR content, titles,
 or verdicts. Verdict judgment is the subagent's job. Your job is
 mechanical: construct redirect prompts and dispatch agents.
 
-## Step 6 — Verdict sanity check
+## Step 6 — Sanitize and check verdicts
 
-Run the post-hoc verdict check:
+First, sanitize YAML frontmatter in summary files (fixes unquoted
+colons that break parsing):
+
+```bash
+python3 scripts/pr_context_sanitize_yaml.py
+```
+
+Then run the post-hoc verdict check:
 
 ```bash
 python3 scripts/pr_context_verdict_check.py

@@ -19,12 +19,12 @@ Following the CLAUDE.md principle "constrain creativity — prefer buttons over 
 | 1. Fetch | deterministic | `pr_context_fetch.py` |
 | 2. Filter | deterministic | `pr_context_filter.py` |
 | 3. Pre-classify | deterministic | `pr_context_preclassify.py` |
-| 4. Prepare batches | deterministic | `pr_context_prepare.py` |
+| 4. Prepare prompts | deterministic | `pr_context_prepare.py` |
 | 5. Summarize | LLM (haiku) | subagents via skill |
-| 6. Verdict check | deterministic | `pr_context_verdict_check.py` |
+| 6. Sanitize + check | deterministic | `pr_context_sanitize_yaml.py` + `pr_context_verdict_check.py` |
 | 7. Report | deterministic | `pr_context_report.py` |
 
-## The five scripts
+## The six scripts
 
 ### `pr_context_fetch.py`
 
@@ -70,6 +70,12 @@ The script reads `prompt-template.md` from the skill directory and replaces plac
 Outputs a JSON summary to stdout: `{"batches": ["artifacts/prcontext/batch_0.prompt.md", ...], "noise_written": N}`. The orchestrator parses this to get batch file paths for dispatch — zero batching logic or template filling in the orchestrator.
 
 **Design principle:** This script is the culmination of anti-patterns 1-2. The orchestrator no longer builds prompts (anti-pattern 1) or reasons about grouping (anti-pattern 2). The script makes all grouping and template decisions deterministically; the orchestrator reads JSON and dispatches.
+
+### `pr_context_sanitize_yaml.py`
+
+Fixes unquoted YAML string values in subagent-written summary files. Runs before the verdict check to prevent `yaml.safe_load()` failures. Processes each summary file line by line: if a frontmatter value contains a colon and isn't already quoted, wraps it in double quotes. Idempotent — running twice produces the same output. Logs which files and fields were repaired. Exit 0 always (repair is best-effort, not fatal).
+
+**Why this exists:** Five consecutive runs (6-10) surfaced YAML parsing failures from unquoted `title` and `gist` fields containing colons (e.g. `title: feat: Add MCP...`). The prompt template instructs quoting but agents remain inconsistent. This script provides a deterministic safety net.
 
 ### `pr_context_verdict_check.py`
 
@@ -259,6 +265,10 @@ Title prefix patterns (`fix:`, `test:`, review comments, `feat:`, no prefix), fi
 
 Mixed verdicts clean, distribution skew detection, hint overrides, missing summaries, small batches below threshold, report file creation, missing manifest.
 
+### Tier 1g: Sanitize YAML script (7 tests)
+
+Unquoted title with colon, unquoted gist with colon, already-quoted stays unchanged, no-colon stays unchanged, body content preserved, idempotent, referenced script exists.
+
 ### Tier 2: Skill YAML validation (7 tests)
 
 Frontmatter fields, name matches directory, name format, under 500 lines, referenced scripts exist, prompt template exists, 7 steps.
@@ -267,7 +277,7 @@ Frontmatter fields, name matches directory, name format, under 500 lines, refere
 
 | Tier | Tests | Time | Cost |
 |------|-------|------|------|
-| 1a-1d: Scripts | 31 | ~0.8s | Free |
+| 1a-1g: Scripts | 38 | ~0.8s | Free |
 | 2: Skill YAML | 7 | ~0.1s | Free |
 
 No LLM tests yet — the skill invokes subagents through `Agent` tool calls which aren't subprocess-testable. The deterministic guardrails (pre-classify + verdict check) compensate by catching the most common failure modes without LLM invocation.
@@ -279,7 +289,8 @@ scripts/
   pr_context_fetch.py          # Download patches and metadata via gh
   pr_context_filter.py         # Strip noise hunks from patches
   pr_context_preclassify.py    # Add deterministic hints to manifest
-  pr_context_prepare.py        # Group PRs into batches, build prompt files
+  pr_context_prepare.py        # Build per-PR prompt files
+  pr_context_sanitize_yaml.py  # Fix unquoted YAML frontmatter in summaries
   pr_context_verdict_check.py  # Post-hoc sanity check on verdicts
   pr_context_report.py         # Generate verdict table from summary frontmatter
 
@@ -431,7 +442,7 @@ Potential directions discussed but not yet implemented:
 - ~~**Prepare script (`pr_context_prepare.py`)**~~ — **done** (run 9). Deterministic script that handles batch grouping, prompt template filling, and noise summary writing. The orchestrator reads the script's JSON output and dispatches pre-built prompt files — zero template logic, zero batching decisions in the orchestrator.
 - ~~**Redirect prompts**~~ — **done** (run 10). The orchestrator sends `Read {path} and follow all instructions exactly` instead of reading prompt files into its own context. Agents read their own prompt files. Orchestrator Step 5 context dropped from ~50KB to ~500 bytes, producing the fastest pipeline time (~2 minutes) and eliminating the last vector for orchestrator content reasoning.
 - **Per-PR prompts (unbatching)** — now that redirect prompts make orchestrator context cost negligible, the only remaining argument for batching is dispatch overhead. If `pr_context_prepare.py` wrote one prompt file per PR, the orchestrator would send 22 redirect strings (~2KB) instead of 5. Execution time per agent drops from ~70s (4-5 PRs sequentially) to ~15s (1 PR), but the ~10 concurrency cap means agents queue in waves. Net wall-clock might be similar (~40-50s vs ~75s), but isolation is perfect: zero cross-PR contamination, individual retry granularity, simpler templates. The redirect-prompt model makes this architecturally cheap to try.
-- **YAML frontmatter quoting enforcement** — five consecutive runs (6-10) have surfaced parsing failures from unquoted string fields containing colons. The prompt template instructs quoting but subagents remain inconsistent. A deterministic post-processing script (validate + auto-quote YAML string fields) would close this permanently without relying on LLM compliance — this is now the highest-priority open item.
+- ~~**YAML frontmatter quoting enforcement**~~ — **done**. `pr_context_sanitize_yaml.py` runs in Step 6 before the verdict check. Fixes unquoted string values containing colons by line-by-line repair. Idempotent, logs repaired fields. Closes the five-run regression (runs 6-10) permanently without relying on LLM compliance.
 - ~~**Minimum batch size guard**~~ — run 8 showed that 2-key Skill batches can misfire, but run 9 succeeded with a 2-PR Agent batch, suggesting the failure was Skill-specific. No longer a priority for Agent-based dispatch.
 - **Cypress/E2E test glob expansion** — the current `TEST_GLOBS` miss Cypress-style paths (`packages/cypress/cypress/*.ts`), causing test-only PRs like #7126 to pass through to LLM evaluation without a hint
 - **Verdict confidence scoring** — the comparative evaluation produces reasoning; a second pass could score confidence (high/medium/low) based on how close the peripheral vs relevant arguments are

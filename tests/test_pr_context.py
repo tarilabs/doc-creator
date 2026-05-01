@@ -18,6 +18,7 @@ PRECLASSIFY_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_preclassify.py")
 VERDICT_CHECK_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_verdict_check.py")
 REPORT_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_report.py")
 PREPARE_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_prepare.py")
+SANITIZE_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_sanitize_yaml.py")
 
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
@@ -930,7 +931,7 @@ def _write_template(directory, content=None):
 
 class TestPrContextPrepare:
 
-    def test_single_pr_produces_one_batch(self, art_dir):
+    def test_single_pr_produces_one_prompt(self, art_dir):
         entries = [{"url": "https://github.com/org/repo/pull/1",
                     "file": "org__repo__1", "status": "fetched",
                     "title": "Add feature X"}]
@@ -945,9 +946,10 @@ class TestPrContextPrepare:
         assert result.returncode == 0
 
         output = json.loads(result.stdout.strip())
-        assert len(output["batches"]) == 1
+        assert len(output["prompts"]) == 1
         assert output["noise_written"] == 0
-        assert os.path.isfile(output["batches"][0])
+        assert output["prompts"][0].endswith("org__repo__1.prompt.md")
+        assert os.path.isfile(output["prompts"][0])
 
     def test_empty_patch_writes_noise_summary(self, art_dir):
         entries = [{"url": "https://github.com/org/repo/pull/1",
@@ -965,7 +967,7 @@ class TestPrContextPrepare:
 
         output = json.loads(result.stdout.strip())
         assert output["noise_written"] == 1
-        assert len(output["batches"]) == 0
+        assert len(output["prompts"]) == 0
 
         summary_path = os.path.join(
             art_dir, "artifacts", "prcontext", "org__repo__1.md")
@@ -973,7 +975,7 @@ class TestPrContextPrepare:
         fm, _ = _parse_manifest(summary_path)
         assert fm["verdict"] == "noise"
 
-    def test_batching_produces_max_5_batches(self, art_dir):
+    def test_each_pr_gets_own_prompt(self, art_dir):
         entries = [
             {"url": f"https://github.com/org/repo/pull/{i}",
              "file": f"org__repo__{i}", "status": "fetched",
@@ -992,7 +994,10 @@ class TestPrContextPrepare:
         assert result.returncode == 0
 
         output = json.loads(result.stdout.strip())
-        assert len(output["batches"]) <= 5
+        assert len(output["prompts"]) == 12
+        for i in range(12):
+            assert any(p.endswith(f"org__repo__{i}.prompt.md")
+                       for p in output["prompts"])
 
     def test_prompt_file_contains_template_content(self, art_dir):
         entries = [{"url": "https://github.com/org/repo/pull/42",
@@ -1009,7 +1014,7 @@ class TestPrContextPrepare:
         assert result.returncode == 0
 
         output = json.loads(result.stdout.strip())
-        with open(output["batches"][0]) as f:
+        with open(output["prompts"][0]) as f:
             content = f.read()
         assert "Target:" in content
         assert "{documentation_target_file}" not in content
@@ -1034,7 +1039,7 @@ class TestPrContextPrepare:
         assert result.returncode == 0
 
         output = json.loads(result.stdout.strip())
-        with open(output["batches"][0]) as f:
+        with open(output["prompts"][0]) as f:
             content = f.read()
         assert "DETERMINISTIC HINT: peripheral" in content
 
@@ -1053,7 +1058,7 @@ class TestPrContextPrepare:
         assert result.returncode == 0
 
         output = json.loads(result.stdout.strip())
-        with open(output["batches"][0]) as f:
+        with open(output["prompts"][0]) as f:
             content = f.read()
         assert "hint_block: (none)" in content
 
@@ -1077,8 +1082,146 @@ class TestPrContextPrepare:
         assert result.returncode == 0
 
         output = json.loads(result.stdout.strip())
-        assert len(output["batches"]) == 1
+        assert len(output["prompts"]) == 1
 
     def test_missing_manifest_exits_2(self, art_dir):
         result = _run_prepare(str(art_dir / "nonexistent.md"))
         assert result.returncode == 2
+
+
+# ── Tier 1g: Sanitize YAML script tests ────────────────────────────────────
+
+
+def _write_raw_summary(output_dir, stem, raw_frontmatter, body="## What changed\n\nTest.\n"):
+    """Write a summary file with raw (potentially broken) YAML frontmatter."""
+    path = os.path.join(output_dir, f"{stem}.md")
+    with open(path, "w") as f:
+        f.write("---\n")
+        f.write(raw_frontmatter)
+        f.write("---\n\n")
+        f.write(body)
+    return path
+
+
+def _run_sanitize(manifest):
+    return subprocess.run(
+        [sys.executable, SANITIZE_SCRIPT, "--manifest", manifest],
+        capture_output=True, text=True,
+    )
+
+
+class TestPrContextSanitizeYaml:
+
+    def test_unquoted_title_with_colon_gets_quoted(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched"}]
+        manifest = _write_manifest(art_dir, entries)
+        output_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_raw_summary(output_dir, "org__repo__1",
+                           "verdict: relevant\n"
+                           "title: feat: Add MCP server deployments\n"
+                           "gist: Adds deployment list page\n")
+
+        result = _run_sanitize(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(
+            os.path.join(output_dir, "org__repo__1.md"))
+        assert fm["title"] == "feat: Add MCP server deployments"
+
+    def test_unquoted_gist_with_colon_gets_quoted(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched"}]
+        manifest = _write_manifest(art_dir, entries)
+        output_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_raw_summary(output_dir, "org__repo__1",
+                           "verdict: relevant\n"
+                           "title: Add feature\n"
+                           "gist: Cleanup following PR 7063: removes compat code\n")
+
+        result = _run_sanitize(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(
+            os.path.join(output_dir, "org__repo__1.md"))
+        assert fm["gist"] == "Cleanup following PR 7063: removes compat code"
+
+    def test_already_quoted_stays_unchanged(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched"}]
+        manifest = _write_manifest(art_dir, entries)
+        output_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_raw_summary(output_dir, "org__repo__1",
+                           'verdict: relevant\n'
+                           'title: "feat: Add MCP servers"\n'
+                           'gist: "Does X: then Y"\n')
+
+        result = _run_sanitize(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(
+            os.path.join(output_dir, "org__repo__1.md"))
+        assert fm["title"] == "feat: Add MCP servers"
+        assert fm["gist"] == "Does X: then Y"
+
+    def test_no_colon_stays_unchanged(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched"}]
+        manifest = _write_manifest(art_dir, entries)
+        output_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_raw_summary(output_dir, "org__repo__1",
+                           "verdict: relevant\n"
+                           "title: Add feature X\n"
+                           "gist: Adds a new feature\n")
+
+        result = _run_sanitize(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(
+            os.path.join(output_dir, "org__repo__1.md"))
+        assert fm["title"] == "Add feature X"
+
+    def test_body_content_preserved(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched"}]
+        manifest = _write_manifest(art_dir, entries)
+        output_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        body = "## Verdict reasoning\n\nThis is important: keep it.\n"
+        _write_raw_summary(output_dir, "org__repo__1",
+                           "verdict: relevant\n"
+                           "title: feat: Add X\n",
+                           body=body)
+
+        result = _run_sanitize(manifest)
+        assert result.returncode == 0
+
+        path = os.path.join(output_dir, "org__repo__1.md")
+        with open(path) as f:
+            text = f.read()
+        assert body in text
+
+    def test_idempotent(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched"}]
+        manifest = _write_manifest(art_dir, entries)
+        output_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_raw_summary(output_dir, "org__repo__1",
+                           "verdict: relevant\n"
+                           "title: feat: Add MCP servers\n")
+
+        _run_sanitize(manifest)
+        path = os.path.join(output_dir, "org__repo__1.md")
+        with open(path) as f:
+            after_first = f.read()
+
+        _run_sanitize(manifest)
+        with open(path) as f:
+            after_second = f.read()
+
+        assert after_first == after_second
+
+    def test_referenced_script_exists(self):
+        with open(SKILL_MD) as f:
+            content = f.read()
+        assert "pr_context_sanitize_yaml.py" in content
+        assert os.path.isfile(SANITIZE_SCRIPT)

@@ -1,13 +1,12 @@
-You are summarizing pull requests for a technical writer. Be BRIEF.
-Process each PR independently — do not let one PR's verdict influence another.
+You are summarizing a pull request for a technical writer. Be BRIEF.
 
 STEP 1: Read the documentation target file at {documentation_target_file}
 This is the full feature specification being documented. Use the
-"In Scope" and "Acceptance Criteria" sections to judge whether a PR
+"In Scope" and "Acceptance Criteria" sections to judge whether the PR
 changes what documentation would say. PRs that only relate to
 out-of-scope or deferred items are peripheral, not relevant.
 
-STEP 2: For EACH PR entry listed below, do the following in order:
+STEP 2: Evaluate the PR described below.
 
   a. Read the PR metadata file (meta_yaml_path). Extract the `body`
      field — this is the PR description.
@@ -17,11 +16,9 @@ STEP 2: For EACH PR entry listed below, do the following in order:
   d. Evaluate all three verdict options (see output format below).
   e. Write the output markdown file to the output_file path.
 
-Complete all sub-steps for one PR before moving to the next.
-
 {pr_entries}
 
-## Output format (apply to EACH PR)
+## Output format
 
 Write a markdown file to the PR's output_file with YAML frontmatter
 and three sections.
@@ -77,11 +74,8 @@ DOs:
 - Focus on WHAT changed for the user, not HOW it was implemented
 - Mention new configuration knobs, CLI flags, or environment variables by name
 - Note if this is a breaking change or changes default behavior
-- Process ALL PR entries — do not skip any
-
 DON'Ts:
 - Don't describe code structure, function names, or module organization
 - Don't list every file changed
 - Don't speculate about changes outside the patch
-- Don't write more than 200 words total per PR (excluding verdict reasoning)
-- Don't reference or compare with other PRs in this batch
+- Don't write more than 200 words total (excluding verdict reasoning)

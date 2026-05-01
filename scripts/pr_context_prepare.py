@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Prepare subagent prompt files for PR review batches.
+"""Prepare subagent prompt files for PR review.
 
 Reads the prcontext manifest, writes noise summaries for empty patches,
-groups remaining entries into batches, fills the prompt template, and
-writes one prompt file per batch.
+fills the prompt template per PR, and writes one prompt file per PR.
 
 Outputs a JSON summary to stdout:
-  {"batches": ["artifacts/prcontext/batch_0.prompt.md", ...], "noise_written": 2}
+  {"prompts": ["artifacts/prcontext/org__repo__123.prompt.md", ...], "noise_written": 2}
 
 Usage:
     python3 scripts/pr_context_prepare.py
@@ -16,7 +15,6 @@ Usage:
 import argparse
 import json
 import logging
-import math
 import os
 import sys
 
@@ -56,8 +54,8 @@ def write_noise_summary(output_dir, file_key):
     return path
 
 
-def build_pr_entry_block(entry, output_dir, index, batch_size):
-    """Build the text block for one PR entry in a batch prompt."""
+def build_pr_entry_block(entry, output_dir):
+    """Build the text block for a single PR entry in a prompt."""
     url = entry["url"]
     parsed = parse_pr_url(url)
     if not parsed:
@@ -71,7 +69,6 @@ def build_pr_entry_block(entry, output_dir, index, batch_size):
     abs_output_dir = os.path.abspath(output_dir)
 
     lines = [
-        f"### PR {index} of {batch_size}",
         f'- pr_title: "{title}"',
         f"- pr_url: {url}",
         f"- repo: {repo}",
@@ -84,21 +81,9 @@ def build_pr_entry_block(entry, output_dir, index, batch_size):
     return "\n".join(lines)
 
 
-def group_into_batches(entries, max_batches=5):
-    """Group entries into at most max_batches batches."""
-    n = len(entries)
-    if n == 0:
-        return []
-    batch_size = max(1, math.ceil(n / max_batches))
-    batches = []
-    for i in range(0, n, batch_size):
-        batches.append(entries[i:i + batch_size])
-    return batches
-
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Prepare subagent prompt files for PR review batches.")
+        description="Prepare subagent prompt files for PR review.")
     parser.add_argument("--manifest", default="artifacts/prcontext.md",
                         help="Path to the prcontext manifest")
     parser.add_argument("--target", default="artifacts/jiracontext.md",
@@ -146,37 +131,32 @@ def main():
         else:
             to_evaluate.append(entry)
 
-    batches = group_into_batches(to_evaluate)
     abs_target = os.path.abspath(args.target)
-    batch_paths = []
+    prompt_paths = []
 
-    for batch_idx, batch in enumerate(batches):
-        pr_blocks = []
-        for entry_idx, entry in enumerate(batch, start=1):
-            block = build_pr_entry_block(
-                entry, output_dir, entry_idx, len(batch))
-            if block:
-                pr_blocks.append(block)
+    for entry in to_evaluate:
+        file_key = entry["file"]
+        block = build_pr_entry_block(entry, output_dir)
+        if not block:
+            continue
 
-        pr_entries_text = "\n\n".join(pr_blocks)
         prompt = template.replace(
             "{documentation_target_file}", abs_target
         ).replace(
-            "{pr_entries}", pr_entries_text
+            "{pr_entries}", block
         )
 
-        batch_file = os.path.join(output_dir, f"batch_{batch_idx}.prompt.md")
-        with open(batch_file, "w", encoding="utf-8") as f:
+        prompt_file = os.path.join(output_dir, f"{file_key}.prompt.md")
+        with open(prompt_file, "w", encoding="utf-8") as f:
             f.write(prompt)
-        batch_paths.append(batch_file)
-        log.info("Wrote batch %d: %d PRs → %s",
-                 batch_idx, len(batch), batch_file)
+        prompt_paths.append(prompt_file)
+        log.info("Wrote prompt: %s → %s", file_key, prompt_file)
 
-    result = {"batches": batch_paths, "noise_written": noise_written}
+    result = {"prompts": prompt_paths, "noise_written": noise_written}
     print(json.dumps(result))
 
-    log.info("Prepared %d batch(es), %d noise summary(ies)",
-             len(batch_paths), noise_written)
+    log.info("Prepared %d prompt(s), %d noise summary(ies)",
+             len(prompt_paths), noise_written)
 
 
 if __name__ == "__main__":
