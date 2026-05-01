@@ -31,8 +31,12 @@ import shutil
 import sys
 import urllib.request
 
-from jira_utils import require_env, get_issue, get_comments, adf_to_markdown
+from jira_utils import (require_env, get_issue, get_comments,
+                        search_issues, api_call_with_retry,
+                        adf_to_markdown)
 
+
+FIELD_GIT_PULL_REQUEST = "customfield_10875"  # "Git Pull Request" custom field
 
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -130,15 +134,30 @@ def _fetch_attachments(attachments, issue_key, artifacts_dir, user, token):
         print(f"  {count} attachment(s) saved to {att_dir}", file=sys.stderr)
 
 
+def _extract_urls_from_adf(adf_doc):
+    """Extract all URLs from inlineCard nodes in an ADF document."""
+    urls = []
+    if not isinstance(adf_doc, dict):
+        return urls
+    if adf_doc.get("type") == "inlineCard":
+        url = adf_doc.get("attrs", {}).get("url", "")
+        if url:
+            urls.append(url)
+    for child in adf_doc.get("content", []):
+        urls.extend(_extract_urls_from_adf(child))
+    return urls
+
+
 def _write_issue_md(issue_key, output_dir, server, user, token, written):
-    """Fetch a single issue and write it as {KEY}.md. Returns issuelinks."""
+    """Fetch a single issue and write it as {KEY}.md with frontmatter."""
     if issue_key in written:
         return []
     written.add(issue_key)
 
     try:
         issue = get_issue(server, user, token, issue_key,
-                          fields=["summary", "description", "issuelinks"])
+                          fields=["summary", "description", "issuelinks",
+                                  FIELD_GIT_PULL_REQUEST])
     except Exception as e:
         print(f"  Error fetching {issue_key}: {e}", file=sys.stderr)
         return []
@@ -147,17 +166,48 @@ def _write_issue_md(issue_key, output_dir, server, user, token, written):
     summary = fields.get("summary", "")
     desc_md = _desc_to_markdown(fields.get("description"))
 
+    pr_urls = _extract_urls_from_adf(fields.get(FIELD_GIT_PULL_REQUEST))
+
+    # Remote links (web links / hyperlinks attached to the issue)
+    remote_links = []
+    try:
+        remotes = api_call_with_retry(
+            server, f"/issue/{issue_key}/remotelink", user, token)
+        for r in remotes:
+            obj = r.get("object", {})
+            url = obj.get("url", "")
+            title = obj.get("title", "")
+            if url:
+                remote_links.append({"title": title, "url": url})
+    except Exception:
+        pass
+
     md_path = os.path.join(output_dir, f"{issue_key}.md")
     with open(md_path, "w", encoding="utf-8") as f:
-        f.write(f"# {issue_key}: {summary}\n\n")
+        f.write("---\n")
+        f.write(f"jira_key: {issue_key}\n")
+        f.write(f"summary: \"{summary}\"\n")
+        if pr_urls:
+            f.write("git_pull_requests:\n")
+            for url in pr_urls:
+                f.write(f"  - {url}\n")
+        if remote_links:
+            f.write("links:\n")
+            for link in remote_links:
+                f.write(f"  - title: \"{link['title']}\"\n")
+                f.write(f"    url: {link['url']}\n")
+        f.write("---\n\n")
         f.write(desc_md + "\n")
 
     print(f"  Wrote {md_path}", file=sys.stderr)
     return fields.get("issuelinks", [])
 
 
-def _fetch_all(issue_key, output_dir, server, user, token):
-    """Fetch issue and all linked issues, write each as its own markdown file.
+def _fetch_all(issue_key, output_dir, server, user, token, link_filter="UX"):
+    """Fetch issue, its children, and filtered linked issues.
+
+    Children (via JQL parent query) are always fetched.
+    Linked issues are only fetched if their key contains link_filter.
 
     Returns 0 on success, 1 on error.
     """
@@ -169,11 +219,20 @@ def _fetch_all(issue_key, output_dir, server, user, token):
     if issue_key not in written:
         return 1
 
+    children = search_issues(server, user, token,
+                             f"parent = {issue_key} ORDER BY key ASC",
+                             fields=["summary"], max_results=100)
+    for child in children:
+        child_key = child.get("key", "")
+        _write_issue_md(child_key, output_dir, server, user, token, written)
+
     for link in issuelinks:
         linked = link.get("inwardIssue") or link.get("outwardIssue")
         if not linked:
             continue
         linked_key = linked.get("key", "")
+        if link_filter and link_filter not in linked_key:
+            continue
         _write_issue_md(linked_key, output_dir, server, user, token, written)
 
     print(f"OK: wrote {len(written)} issue(s) to {output_dir}")
@@ -199,6 +258,10 @@ def main():
                                  "each as its own markdown file in the "
                                  "given directory.")
 
+    parser.add_argument("--link-filter", default="UX",
+                        help="Only download linked issues whose key "
+                             "contains this substring (default: UX). "
+                             "Pass empty string to download all links.")
     parser.add_argument("--markdown", action="store_true",
                         help="Convert ADF fields (description, comments) "
                              "to markdown strings in the output")
@@ -219,7 +282,8 @@ def main():
             print("Error: JIRA_SERVER, JIRA_USER, and JIRA_TOKEN env vars "
                   "required for --fetch-all mode.", file=sys.stderr)
             sys.exit(2)
-        rc = _fetch_all(args.issue_key, args.fetch_all, server, user, token)
+        rc = _fetch_all(args.issue_key, args.fetch_all, server, user, token,
+                        link_filter=args.link_filter)
         sys.exit(rc)
 
     # --write-original-only mode: no --fields means caller just wants

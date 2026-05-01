@@ -54,6 +54,28 @@ def jira_emu():
     import uvicorn
 
     app = create_app()
+
+    # In-memory remote links store (the emulator doesn't support them)
+    _remote_links: dict[str, list] = {}
+
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    @app.post("/rest/api/3/issue/{key}/remotelink")
+    @app.post("/rest/api/2/issue/{key}/remotelink")
+    async def _create_remote_link(key: str, request: Request):
+        body = await request.json()
+        _remote_links.setdefault(key, []).append(body)
+        return JSONResponse({"id": len(_remote_links[key])}, status_code=201)
+
+    @app.get("/rest/api/3/issue/{key}/remotelink")
+    @app.get("/rest/api/2/issue/{key}/remotelink")
+    async def _get_remote_links(key: str):
+        return JSONResponse(_remote_links.get(key, []))
+
+    # Expose the store so per-test reset can clear it
+    app.state.remote_links = _remote_links
+
     config = uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
@@ -69,14 +91,16 @@ def jira_emu():
         except Exception:
             time.sleep(0.05)
 
-    yield base_url
+    yield base_url, _remote_links
     server.should_exit = True
 
 
 @pytest.fixture
 def jira(jira_emu):
     """Per-test fixture: resets emulator state and provides helpers."""
-    from jira_emulator.services import seed_service
+    base_url, remote_links = jira_emu
+
+    from jira_emulator.services import seed_service, import_service
     _extra_link_types = [
         {"name": "Cloners",
          "inward_description": "is cloned by",
@@ -91,15 +115,22 @@ def jira(jira_emu):
         if lt["name"] not in {x["name"] for x in _orig}
     ]
 
+    if "git_pull_request" not in import_service.CUSTOM_FIELD_MAP:
+        import_service.CUSTOM_FIELD_MAP["git_pull_request"] = (
+            "customfield_10875", "json"
+        )
+
     req = urllib.request.Request(
-        f"{jira_emu}/api/admin/reset", method="POST", data=b"")
+        f"{base_url}/api/admin/reset", method="POST", data=b"")
     urllib.request.urlopen(req)
+    remote_links.clear()
 
     class JiraHelper:
-        url = jira_emu
+        url = base_url
 
         @staticmethod
-        def create(key, summary, description, labels=None, components=None):
+        def create(key, summary, description, labels=None, components=None,
+                   git_pull_request=None):
             """Import an issue with a specific key."""
             issue = {
                 "key": key,
@@ -112,13 +143,22 @@ def jira(jira_emu):
                 issue["labels"] = labels
             if components:
                 issue["components"] = [{"name": c} for c in components]
-            _jira_request(jira_emu, "POST", "/api/admin/import",
+            if git_pull_request is not None:
+                issue["git_pull_request"] = git_pull_request
+            _jira_request(base_url, "POST", "/api/admin/import",
                           {"issues": [issue]})
+
+        @staticmethod
+        def add_remote_link(key, url, title):
+            """Add a remote link (web link) to an issue."""
+            _jira_request(base_url, "POST",
+                          f"/rest/api/3/issue/{key}/remotelink",
+                          {"object": {"url": url, "title": title}})
 
         @staticmethod
         def get(key):
             """GET an issue, return parsed JSON."""
-            return _jira_request(jira_emu, "GET",
+            return _jira_request(base_url, "GET",
                                  f"/rest/api/3/issue/{key}")
 
         @staticmethod
@@ -127,13 +167,13 @@ def jira(jira_emu):
             from urllib.parse import quote
             path = (f"/rest/api/3/search/jql"
                     f"?jql={quote(jql, safe='')}&fields={fields}")
-            data = _jira_request(jira_emu, "GET", path)
+            data = _jira_request(base_url, "GET", path)
             return data.get("issues", [])
 
         @staticmethod
         def request(method, path, body=None):
             """Make an arbitrary API request to the emulator."""
-            return _jira_request(jira_emu, method, path, body)
+            return _jira_request(base_url, method, path, body)
 
     return JiraHelper()
 
