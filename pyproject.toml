@@ -10,7 +10,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest",
-    "jira-emulator @ git+https://github.com/jctanner/jira-emulator.git",
+    "jira-emulator @ git+https://github.com/tarilabs/jira-emulator.git@tarilabs-20260501-remoteLinkAndCustomFieldsImport",
 ]
 
 [tool.pytest.ini_options]
