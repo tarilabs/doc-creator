@@ -172,7 +172,7 @@ def main():
                 "reason": "unrecognised URL format",
             })
 
-    manifest_path = os.path.join(args.output_dir, "prcontext.md")
+    manifest_path = os.path.normpath(args.output_dir) + ".md"
     manifest_fm = {
         "started_at": datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"),

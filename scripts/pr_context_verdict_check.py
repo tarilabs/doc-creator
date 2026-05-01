@@ -7,7 +7,7 @@ mismatches, or missing summaries.
 
 Usage:
     python3 scripts/pr_context_verdict_check.py
-    python3 scripts/pr_context_verdict_check.py --manifest artifacts/prcontext/prcontext.md
+    python3 scripts/pr_context_verdict_check.py --manifest artifacts/prcontext.md
 """
 
 import argparse
@@ -94,7 +94,7 @@ def check_missing_summaries(entries, output_dir):
 def main():
     parser = argparse.ArgumentParser(
         description="Sanity-check verdict distribution across PR summaries.")
-    parser.add_argument("--manifest", default="artifacts/prcontext/prcontext.md",
+    parser.add_argument("--manifest", default="artifacts/prcontext.md",
                         help="Path to the prcontext manifest")
     parser.add_argument("--output-dir", default=None,
                         help="Directory with summary .md files "
@@ -112,7 +112,7 @@ def main():
         sys.exit(2)
 
     fm, _ = _parse_manifest(args.manifest)
-    output_dir = args.output_dir or os.path.dirname(args.manifest)
+    output_dir = args.output_dir or fm.get("output_directory") or os.path.splitext(args.manifest)[0]
     entries = fm.get("pull_requests", [])
 
     fetched = [e for e in entries if e.get("status") == "fetched"]

@@ -122,7 +122,7 @@ class TestFetchManifestWriting:
         )
         assert result.returncode == 0
 
-        pr_manifest = os.path.join(out_dir, "prcontext.md")
+        pr_manifest = out_dir + ".md"
         assert os.path.exists(pr_manifest)
         pr_fm, _ = _parse_manifest(pr_manifest)
         assert pr_fm["pull_requests"][0]["status"] == "skipped"
@@ -401,7 +401,7 @@ def _write_manifest(directory, entries, source_manifest="artifacts/jiracontext.m
     """Write a prcontext.md manifest with YAML frontmatter."""
     prcontext_dir = os.path.join(directory, "artifacts", "prcontext")
     os.makedirs(prcontext_dir, exist_ok=True)
-    manifest_path = os.path.join(prcontext_dir, "prcontext.md")
+    manifest_path = os.path.join(directory, "artifacts", "prcontext.md")
     fm = {
         "started_at": "2026-01-01T00:00:00Z",
         "source_manifest": source_manifest,

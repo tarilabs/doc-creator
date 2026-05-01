@@ -76,6 +76,26 @@ Output: `artifacts/jiracontext/` with curated issue files and a manifest at `art
 
 For design rationale, the copy-in vs prune decision, testing strategy (including LLM tests), and agentskills.io compliance details, see [docs/jiracontext.md](docs/jiracontext.md).
 
+## PR Context
+
+Takes the PR URLs from the jiracontext manifest, downloads patches and metadata via `gh`, strips noise (lock files, generated code, test hunks, whitespace-only changes), and uses LLM subagents to classify each PR by documentation relevance. A deterministic pre-classifier adds advisory hints based on title patterns and file analysis, and a post-hoc sanity check flags suspicious verdict distributions.
+
+```bash
+# Full flow via the skill:
+/prcontext-populate
+
+# Or run the scripts individually:
+python scripts/pr_context_fetch.py
+python scripts/pr_context_filter.py
+python scripts/pr_context_preclassify.py
+# ... (LLM summarization via skill) ...
+python scripts/pr_context_verdict_check.py
+```
+
+Output: `artifacts/prcontext/` with filtered patches, per-PR summary files (with verdict reasoning), and a manifest at `artifacts/prcontext.md`.
+
+For design rationale, the comparative evaluation prompt, pre-classification strategy, verdict sanity checks, and before/after results, see [docs/prcontext.md](docs/prcontext.md).
+
 ## Low-level usage
 
 Fetch a single issue as JSON:

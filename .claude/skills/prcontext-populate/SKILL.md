@@ -53,13 +53,14 @@ structure (under `artifacts/prcontext/` by default, or the custom
 output directory):
 
 ```
-artifacts/prcontext/
-  prcontext.md              # manifest with YAML frontmatter
-  raw/{file}.patch           # original patches from gh
-  raw/{file}.meta.yaml       # PR metadata (title, body, labels, etc.)
-  filtered/{file}.patch      # noise-filtered patches
-  {file}.md                  # output summaries (written in Step 5)
-  verdict_check.md           # post-hoc sanity check (written in Step 6)
+artifacts/
+  prcontext.md               # manifest with YAML frontmatter
+  prcontext/
+    raw/{file}.patch           # original patches from gh
+    raw/{file}.meta.yaml       # PR metadata (title, body, labels, etc.)
+    filtered/{file}.patch      # noise-filtered patches
+    {file}.md                  # output summaries (written in Step 5)
+    verdict_check.md           # post-hoc sanity check (written in Step 6)
 ```
 
 `{file}` matches the `file` field in each manifest entry
@@ -67,14 +68,24 @@ artifacts/prcontext/
 
 ## Step 4 — Prepare subagent context
 
-Read the manifest at `artifacts/prcontext/prcontext.md` (or the custom
+Read the manifest at `artifacts/prcontext.md` (or the custom
 output directory).
 
-Resolve the **absolute path** to `artifacts/jiracontext.md` — this will
-be passed to each subagent as `{documentation_target_file}` so the
-subagent reads the full documentation target itself.
+Resolve the following **absolute paths** (needed for subagent prompts):
+- `{documentation_target_file}` — absolute path to `artifacts/jiracontext.md`
+- `{output_dir}` — absolute path to `artifacts/prcontext`
 
-From the prcontext manifest, collect all entries where `status: fetched`.
+From the prcontext manifest YAML frontmatter, collect all entries where
+`status: fetched`. For each entry, note only: `file`, `title`, `url`,
+`hint`, `hint_reason`. These are the only fields you need.
+
+Check which filtered patches are empty (0 bytes). For those, directly
+write a summary with `verdict: noise` and a one-line explanation
+("all changes were filtered as noise"). Remove them from the list
+of entries to summarize.
+
+**DO NOT** read `meta.yaml` files, filtered patches, or PR bodies.
+The subagents read those files themselves.
 
 ## Step 5 — Summarize each PR
 
@@ -84,23 +95,26 @@ Read the prompt template from [prompt-template.md](prompt-template.md)
 and fill in these placeholders:
 
 - `{documentation_target_file}` — the absolute path to jiracontext.md
-- `{pr_title}` — from the manifest entry's title field
-- `{pr_body}` — from `raw/{file}.meta.yaml`, body field
-- `{filtered_patch}` — contents of `filtered/{file}.patch`
+- `{meta_yaml_path}` — `{output_dir}/raw/{file}.meta.yaml`
+- `{filtered_patch_path}` — `{output_dir}/filtered/{file}.patch`
+- `{pr_title}` — from the manifest entry's `title` field
 - `{pr_url}` — the PR URL
 - `{repo}` — owner/repo derived from URL
 - `{pr_number}` — PR number
-- `{output_file}` — `artifacts/prcontext/{file}.md`
+- `{output_file}` — `{output_dir}/{file}.md`
 - `{hint_block}` — constructed from the entry's `hint` and `hint_reason`:
   - If `hint` is `no-hint` or absent: empty string
   - If `hint` is `candidate-peripheral`: `"\nDETERMINISTIC HINT: This PR's metadata suggests it is peripheral (reason: {hint_reason}). Evaluate this critically — override if the PR genuinely changes documented behavior.\n"`
   - If `hint` is `candidate-noise`: `"\nDETERMINISTIC HINT: This PR's metadata suggests it is noise (reason: {hint_reason}). Evaluate this critically.\n"`
 
-If the filtered patch file is empty (0 bytes), skip the subagent.
-Instead, directly write a summary with `verdict: noise` and a one-line
-explanation ("all changes were filtered as noise").
+**CRITICAL — launch ALL subagents in a SINGLE message.** Every PR
+is independent. Send one message containing N Agent tool calls, one
+per PR. Do NOT wait for any subagent to complete before launching
+others. Do NOT launch them in sequential batches.
 
-Spawn subagents in parallel where possible (batch independent PRs).
+**DO NOT** reason about PR content, titles, or verdicts. Verdict
+judgment is the subagent's job. Your job is mechanical: read the
+manifest fields, fill in the template, launch all subagents at once.
 
 ## Step 6 — Verdict sanity check
 

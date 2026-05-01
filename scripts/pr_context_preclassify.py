@@ -7,7 +7,7 @@ advisory — the LLM subagent may override it.
 
 Usage:
     python3 scripts/pr_context_preclassify.py
-    python3 scripts/pr_context_preclassify.py --manifest artifacts/prcontext/prcontext.md
+    python3 scripts/pr_context_preclassify.py --manifest artifacts/prcontext.md
 """
 
 import argparse
@@ -119,7 +119,7 @@ def _parse_manifest(path):
 def main():
     parser = argparse.ArgumentParser(
         description="Pre-classify PR entries with deterministic hints.")
-    parser.add_argument("--manifest", default="artifacts/prcontext/prcontext.md",
+    parser.add_argument("--manifest", default="artifacts/prcontext.md",
                         help="Path to the prcontext manifest")
     parser.add_argument("--raw-dir", default=None,
                         help="Directory with raw .meta.yaml files "
@@ -141,9 +141,9 @@ def main():
 
     fm, body = _parse_manifest(args.manifest)
 
-    manifest_parent = os.path.dirname(args.manifest)
-    raw_dir = args.raw_dir or os.path.join(manifest_parent, "raw")
-    filtered_dir = args.filtered_dir or os.path.join(manifest_parent, "filtered")
+    data_dir = fm.get("output_directory") or os.path.splitext(args.manifest)[0]
+    raw_dir = args.raw_dir or os.path.join(data_dir, "raw")
+    filtered_dir = args.filtered_dir or os.path.join(data_dir, "filtered")
 
     entries = fm.get("pull_requests", [])
     counts = {"candidate-peripheral": 0, "candidate-noise": 0, "no-hint": 0}

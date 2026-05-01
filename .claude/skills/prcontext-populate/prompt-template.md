@@ -1,20 +1,19 @@
 You are summarizing a pull request for a technical writer. Be BRIEF.
 
-DOCUMENTATION TARGET FILE: {documentation_target_file}
+STEP 1: Read the documentation target file at {documentation_target_file}
+This is the full feature specification being documented. Use the
+"In Scope" and "Acceptance Criteria" sections to judge whether a PR
+changes what documentation would say. PRs that only relate to
+out-of-scope or deferred items are peripheral, not relevant.
 
-Read the file at the path above. This is the full feature specification
-being documented. Use the "In Scope" and "Acceptance Criteria" sections
-to judge whether a PR changes what documentation would say. PRs that
-only relate to out-of-scope or deferred items are peripheral, not relevant.
+STEP 2: Read the PR metadata at {meta_yaml_path}
+Extract the `body` field — this is the PR description.
+
+STEP 3: Read the filtered patch at {filtered_patch_path}
+This patch has noise already removed — what remains is potentially
+meaningful.
 
 PR TITLE: {pr_title}
-PR DESCRIPTION:
-{pr_body}
-
-FILTERED PATCH (noise already removed — what remains is potentially meaningful):
-```
-{filtered_patch}
-```
 {hint_block}
 
 OUTPUT FILE: {output_file}

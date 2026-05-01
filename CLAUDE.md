@@ -72,6 +72,10 @@ When writing agents/skills: grant only the tools needed, restrict file access to
 
 Be considerate that the developer may not have thought about all artifacts worth saving. But don't save things for the sake of it — every saved artifact must be functional to the overall documentation goal.
 
+### The orchestrator is a router, not a thinker
+
+When a skill dispatches subagents, the orchestrator's job is mechanical: read manifest fields, fill in template placeholders, launch agents. It must never load subagent input data (patches, PR bodies, issue descriptions) into its own context — that triggers reasoning about content that should be delegated. Have subagents read their own files. Keep the orchestrator's context limited to metadata (titles, URLs, file stems, hints). Soft instructions ("spawn in parallel where possible") get ignored under context pressure — use hard constraints ("launch ALL in a SINGLE message", "DO NOT wait for completions").
+
 ### The agents that create the complexity are also the fastest way to see through it
 
 Always be on the lookout for pipeline stages that aren't producing the expected output. When something drifts, investigate immediately — don't accumulate silent failures.
