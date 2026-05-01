@@ -132,18 +132,13 @@ the flags. Report them in Step 7.
 
 ## Step 7 — Report
 
-Read back the prcontext manifest. Count verdicts across the summary
-files (relevant / peripheral / noise). Report a summary table to the
-user:
+Run the report generator:
 
-```
-| PR | Repo | Verdict | Hint | Gist |
-|---|---|---|---|---|
+```bash
+python3 scripts/pr_context_report.py
 ```
 
-Include total counts at the bottom.
-
-If `verdict_check.md` exists and has `status: flagged`, include a
-**Flags** section below the table listing each flag.
-
-Write the report to the `prcontext.md` file body.
+Read `artifacts/prcontext.md` and relay the report body to the user.
+The report body (below the YAML frontmatter) contains the summary
+table with verdict, hint, and gist for each PR, plus any flags from
+the verdict check.

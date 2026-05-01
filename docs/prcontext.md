@@ -21,9 +21,9 @@ Following the CLAUDE.md principle "constrain creativity — prefer buttons over 
 | 3. Pre-classify | deterministic | `pr_context_preclassify.py` |
 | 4-5. Summarize | LLM (haiku) | subagents via skill |
 | 6. Verdict check | deterministic | `pr_context_verdict_check.py` |
-| 7. Report | orchestrator | skill |
+| 7. Report | deterministic | `pr_context_report.py` |
 
-## The four scripts
+## The five scripts
 
 ### `pr_context_fetch.py`
 
@@ -71,6 +71,14 @@ Post-hoc sanity check on verdict distribution. Catches the failure mode where al
 
 Writes `verdict_check.md` with the distribution and flag list. Exit 1 is advisory (flags raised but pipeline continues), not fatal.
 
+### `pr_context_report.py`
+
+Reads all per-PR summary files from `artifacts/prcontext/`, extracts YAML frontmatter fields (`verdict`, `gist`, `pr_url`, `repo`, `pr_number`, `title`), joins with the manifest (`hint`), and generates the markdown verdict table that becomes the body of `artifacts/prcontext.md`. Also appends verdict distribution counts and any flags from `verdict_check.md`.
+
+This script closes anti-pattern 3 (below): the orchestrator no longer reads summary files or parses markdown prose. It calls the script, and the script reads structured frontmatter — zero content processing in the orchestrator.
+
+**Requires:** Each summary file must include a `gist:` field in its YAML frontmatter (max 120 chars). This was added to the prompt template when the script was introduced.
+
 ## Prompt design: comparative evaluation
 
 The prompt template (`prompt-template.md`) evolved through two iterations:
@@ -98,19 +106,21 @@ The first run also suffered from the orchestrator compressing the ~5KB documenta
 
 ## Results: before and after
 
-| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) |
-|--------|----------------------|------------------------|-------------------------------|-------------------------|
-| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) |
-| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) |
-| Noise | 0 | 0 | 0 | 0 |
-| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered |
-| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) |
+| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) |
+|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|
+| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) |
+| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) |
+| Noise | 0 | 0 | 0 | 0 | 1 (5%) |
+| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered |
+| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) |
 
 The second run's 6 peripheral PRs: Cypress tests (#7126), test verification (#1285), UX polish (#7131), route refactoring (#7072), review follow-up (#7082), and YAML simplification (#7063). All correctly identified as not changing what documentation would say.
 
 The third run (different PR set, 23 PRs from RHAISTRAT-1084) produced 3 peripheral: route refactoring (#7072), review follow-up (#7082), test verification (#1285). The higher relevant ratio (86%) is expected — this PR set is tightly scoped to MCP Catalog v1 Summit delivery. The distribution skew flag fired but is advisory; the skew reflects the feature's focus, not a classification failure.
 
 The fourth run (22 PRs, same JIRA source) produced the healthiest distribution: 68% relevant, 32% peripheral. Hint override rate dropped to 3 of 8 (vs 6 of 8 in run 2), suggesting subagents are calibrating better — accepting the peripheral hint when the fix genuinely restores existing behavior (#2367 sort fix, #2432 YAML data flow, #2442 sort-by-name) while still overriding when the "fix" introduces new documented capability (#2433 sourceLabel filtering, #2461 securityIndicators, #7021 URL display behavior). The 7 peripheral PRs: sort fix (#2367), YAML data fix (#2432), sort-by-name fix (#2442), route refactoring (#7072), review follow-up (#7082), Cypress tests (#7126), test verification (#1285).
+
+The fifth run (22 PRs, same JIRA source) used the new `pr_context_report.py` script for Step 7 instead of orchestrator-built reports. Results: 16 relevant (73%), 5 peripheral (23%), 1 noise (5%) — the first run to produce a noise verdict (#7072, internal route utility refactor). The 4 hint overrides (#2432 tool metadata, #2433 sourceLabel filtering, #2461 securityIndicators, #7021 URL display behavior) were all justified: these `fix(`-prefixed PRs implement or enable spec-required capabilities. Notably, #2432 flipped from peripheral (run 4) to relevant (run 5) — the subagent correctly identified that preserving `accessType` and `parameters` fields is a core catalog metadata requirement, not a bug fix.
 
 ## Testing strategy
 
@@ -153,6 +163,7 @@ scripts/
   pr_context_filter.py         # Strip noise hunks from patches
   pr_context_preclassify.py    # Add deterministic hints to manifest
   pr_context_verdict_check.py  # Post-hoc sanity check on verdicts
+  pr_context_report.py         # Generate verdict table from summary frontmatter
 
 .claude/skills/prcontext-populate/
   SKILL.md                     # Skill definition (7 steps)
@@ -205,15 +216,26 @@ In the fourth run, 5 of 22 files resisted automated extraction (awk/grep) becaus
 
 **Root cause:** The gist isn't a structured field. It's a natural-language paragraph that the orchestrator must compress to one line for the table. This forces the orchestrator into a content-processing role — exactly what anti-pattern 1 warned against.
 
-**Fix (proposed):** Add a `gist:` field to the prompt template's YAML frontmatter requirements. One sentence, max 120 characters. Then a `pr_context_report.py` script reads all summary files' frontmatter (verdict + gist), joins with the manifest (hint, repo, PR number), and writes the report table. The orchestrator calls the script and appends the output — zero file reads, zero content parsing.
+**Fix (implemented, run 5):** Added a `gist:` field to the prompt template's YAML frontmatter requirements (one sentence, max 120 characters). The `pr_context_report.py` script reads all summary files' frontmatter (verdict + gist), joins with the manifest (hint, repo, PR number), and writes the report table into the manifest body. The orchestrator calls the script and relays the output — zero file reads, zero content parsing.
 
 **Principle:** Every piece of data the orchestrator needs for the report should be in structured frontmatter, not parsed from markdown prose. If the subagent produces it, the subagent should put it where a script can find it.
+
+## Known limitations
+
+### Subagent spawn latency
+
+Launching N subagents in a single message satisfies the "launch ALL in a SINGLE message" constraint, but tool dispatch still serializes — each Agent call incurs a ~1-2s pause before the next starts. With 22 PRs, this means ~20-40s of spawn time before the first subagent even begins work, even though the subagents themselves complete in ~15-20s once launched.
+
+The spawn phase is the slowest part of the pipeline. The deterministic scripts (Steps 1-3, 6-7) complete in seconds. The subagent execution (Step 5) completes in ~15-20s wall-clock because all run in parallel. But the dispatch overhead to launch them dominates.
+
+**Potential mitigation:** Batch multiple PRs per subagent (e.g., 5 PRs per call → 4-5 Agent calls instead of 22). Trade-off: batching risks context contamination between PRs and makes individual retry impossible. The current approach is correct-by-construction but slow-by-dispatch.
 
 ## What's next
 
 Potential directions discussed but not yet implemented:
 
-- **Report script (`pr_context_report.py`)** — extract the report-building logic from the orchestrator into a deterministic script that reads YAML frontmatter from summary files and generates the markdown table; requires adding a `gist:` field to the prompt template frontmatter
+- ~~**Report script (`pr_context_report.py`)**~~ — **done** (run 5). Reads YAML frontmatter from summary files, generates the markdown verdict table, and appends flags from verdict check. The orchestrator calls the script and relays output — zero file reads, zero content parsing.
 - **Cypress/E2E test glob expansion** — the current `TEST_GLOBS` miss Cypress-style paths (`packages/cypress/cypress/*.ts`), causing test-only PRs like #7126 to pass through to LLM evaluation without a hint
 - **Verdict confidence scoring** — the comparative evaluation produces reasoning; a second pass could score confidence (high/medium/low) based on how close the peripheral vs relevant arguments are
 - **Cross-PR deduplication** — PRs that implement the same feature incrementally (e.g., #6747 adds mock endpoints, #6990 replaces them with real ones) could be grouped to avoid redundant documentation impact bullets
+- **Subagent batching** — group multiple PRs per Agent call to reduce spawn latency (see Known Limitations above)

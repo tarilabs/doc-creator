@@ -26,6 +26,7 @@ Frontmatter fields:
 - pr_number: {pr_number}
 - title: "{pr_title}"
 - verdict: relevant | peripheral | noise
+- gist: One sentence (max 120 chars) summarizing what changed from a user/admin perspective
 
 ## Verdict reasoning
 
@@ -66,6 +67,7 @@ Think: new procedures, changed steps, new config options, new UI screens,
 changed behavior, removed capabilities.
 
 DOs:
+- Keep the gist field under 120 characters — it appears in a summary table
 - Focus on WHAT changed for the user, not HOW it was implemented
 - Mention new configuration knobs, CLI flags, or environment variables by name
 - Note if this is a breaking change or changes default behavior

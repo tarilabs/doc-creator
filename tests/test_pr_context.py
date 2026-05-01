@@ -15,6 +15,7 @@ FETCH_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_fetch.py")
 FILTER_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_filter.py")
 PRECLASSIFY_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_preclassify.py")
 VERDICT_CHECK_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_verdict_check.py")
+REPORT_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_report.py")
 
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
@@ -425,12 +426,14 @@ def _write_meta_yaml(raw_dir, stem, files=None, title="", body=""):
     return path
 
 
-def _write_summary(output_dir, stem, verdict, title=""):
+def _write_summary(output_dir, stem, verdict, title="", gist=""):
     """Write a {stem}.md summary file with YAML frontmatter."""
     path = os.path.join(output_dir, f"{stem}.md")
     fm = {"pr_url": f"https://github.com/org/repo/pull/1",
           "repo": "org/repo", "pr_number": 1,
           "title": title, "verdict": verdict}
+    if gist:
+        fm["gist"] = gist
     with open(path, "w") as f:
         f.write("---\n")
         f.write(yaml.dump(fm, default_flow_style=False, sort_keys=False))
@@ -460,6 +463,13 @@ def _run_verdict_check(manifest, output_dir):
          "--manifest", manifest, "--output-dir", output_dir],
         capture_output=True, text=True,
     )
+
+
+def _run_report(manifest, output_dir=None):
+    cmd = [sys.executable, REPORT_SCRIPT, "--manifest", manifest]
+    if output_dir:
+        cmd.extend(["--output-dir", output_dir])
+    return subprocess.run(cmd, capture_output=True, text=True)
 
 
 # ── Tier 1c: Pre-classify script tests ────────────────────────────────────
@@ -708,3 +718,145 @@ class TestPrContextVerdictCheck:
             str(art_dir / "nonexistent.md"),
             str(art_dir / "artifacts" / "prcontext"))
         assert result.returncode == 2
+
+
+# ── Tier 1e: Report script tests ────────────────────────────────────────────
+
+class TestPrContextReport:
+
+    def test_mixed_verdicts_generates_table(self, art_dir):
+        entries = [
+            {"url": "https://github.com/org/repo/pull/1",
+             "file": "org__repo__1", "status": "fetched",
+             "title": "Add feature X", "hint": "no-hint"},
+            {"url": "https://github.com/org/repo/pull/2",
+             "file": "org__repo__2", "status": "fetched",
+             "title": "fix: typo", "hint": "candidate-peripheral"},
+            {"url": "https://github.com/org/repo/pull/3",
+             "file": "org__repo__3", "status": "fetched",
+             "title": "chore: update deps", "hint": "candidate-noise"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_summary(out_dir, "org__repo__1", "relevant",
+                       gist="New feature X for users")
+        _write_summary(out_dir, "org__repo__2", "peripheral",
+                       gist="Fix a typo in config label")
+        _write_summary(out_dir, "org__repo__3", "noise",
+                       gist="Dependency lockfile update")
+
+        result = _run_report(manifest)
+        assert result.returncode == 0
+
+        _, body = _parse_manifest(manifest)
+        assert "| PR | Repo | Verdict | Hint | Gist |" in body
+        assert "relevant" in body
+        assert "peripheral" in body
+        assert "noise" in body
+        assert "New feature X for users" in body
+        assert "**Totals:** 1 relevant, 1 peripheral, 1 noise" in body
+
+    def test_report_includes_flags(self, art_dir):
+        entries = [
+            {"url": "https://github.com/org/repo/pull/1",
+             "file": "org__repo__1", "status": "fetched",
+             "title": "Add X", "hint": "no-hint"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_summary(out_dir, "org__repo__1", "relevant", gist="Add X")
+
+        vc_path = os.path.join(out_dir, "verdict_check.md")
+        vc_fm = {"status": "flagged", "flags": 1}
+        with open(vc_path, "w") as f:
+            f.write("---\n")
+            f.write(yaml.dump(vc_fm, default_flow_style=False,
+                              sort_keys=False))
+            f.write("---\n\n## Flags\n\n")
+            f.write("- Distribution skew: 1/1 PRs verdict relevant (>80%)\n")
+
+        result = _run_report(manifest)
+        assert result.returncode == 0
+
+        _, body = _parse_manifest(manifest)
+        assert "## Flags" in body
+        assert "Distribution skew" in body
+
+    def test_report_handles_skipped_entries(self, art_dir):
+        entries = [
+            {"url": "https://github.com/org/repo/pull/1",
+             "file": "org__repo__1", "status": "fetched",
+             "title": "Add X", "hint": "no-hint"},
+            {"url": "https://gitlab.example.com/proj/-/merge_requests/1",
+             "file": None, "status": "skipped",
+             "reason": "GitLab MR not yet supported", "hint": "no-hint"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_summary(out_dir, "org__repo__1", "relevant",
+                       gist="Add X feature")
+
+        result = _run_report(manifest)
+        assert result.returncode == 0
+
+        _, body = _parse_manifest(manifest)
+        assert "1 skipped" in body
+        assert "gitlab" not in body.lower()
+
+    def test_report_handles_missing_summaries(self, art_dir):
+        entries = [
+            {"url": "https://github.com/org/repo/pull/1",
+             "file": "org__repo__1", "status": "fetched",
+             "title": "Add X", "hint": "no-hint"},
+            {"url": "https://github.com/org/repo/pull/2",
+             "file": "org__repo__2", "status": "fetched",
+             "title": "Add Y", "hint": "no-hint"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_summary(out_dir, "org__repo__1", "relevant",
+                       gist="Add X feature")
+
+        result = _run_report(manifest)
+        assert result.returncode == 0
+
+        _, body = _parse_manifest(manifest)
+        assert body.count("[#") == 1
+
+    def test_missing_manifest_exits_2(self, art_dir):
+        result = _run_report(str(art_dir / "nonexistent.md"))
+        assert result.returncode == 2
+
+    def test_gist_fallback_to_title(self, art_dir):
+        entries = [
+            {"url": "https://github.com/org/repo/pull/1",
+             "file": "org__repo__1", "status": "fetched",
+             "title": "Add feature X", "hint": "no-hint"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_summary(out_dir, "org__repo__1", "relevant")
+
+        result = _run_report(manifest)
+        assert result.returncode == 0
+
+        _, body = _parse_manifest(manifest)
+        assert "Add feature X" in body
+
+    def test_manifest_frontmatter_preserved(self, art_dir):
+        entries = [
+            {"url": "https://github.com/org/repo/pull/1",
+             "file": "org__repo__1", "status": "fetched",
+             "title": "Add X", "hint": "no-hint"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_summary(out_dir, "org__repo__1", "relevant", gist="Add X")
+
+        result = _run_report(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["started_at"] == "2026-01-01T00:00:00Z"
+        assert fm["source_manifest"] == "artifacts/jiracontext.md"
+        assert len(fm["pull_requests"]) == 1
