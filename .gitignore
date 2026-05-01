@@ -208,3 +208,6 @@ __marimo__/
 
 # Pipeline artifacts — may contain sensitive Jira data, never commit
 artifacts/**
+
+# LLM test scratch directory
+.tmp_llm_test/

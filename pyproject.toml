@@ -15,3 +15,6 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "llm: tests requiring Claude CLI (deselect with -m 'not llm')",
+]

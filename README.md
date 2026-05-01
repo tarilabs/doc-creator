@@ -1,6 +1,6 @@
 # doc-creator
 
-Downloads JIRA issues and saves them to disk as markdown, including description, links, and hierarchy (parent/children).
+TODO: will need revision
 
 ## Prerequisites
 
@@ -52,12 +52,29 @@ Given a single issue key, explores the JIRA hierarchy to build a complete pictur
 
 ```bash
 python scripts/jira_exploration.py RHOAIENG-53404
-python scripts/jira_exploration.py RHAISTRAT-1084 --link-filter RHOAI
+python scripts/jira_exploration.py RHAISTRAT-1084 --link-filter UX
 ```
 
 Output: `artifacts/jiraexploration/` with one `{KEY}.md` per issue and a manifest at `artifacts/jiraexploration.md`.
 
 For architecture details and design rationale, see [docs/jiraexploration.md](docs/jiraexploration.md).
+
+## JIRA Context
+
+Takes the raw exploration output and produces a curated, documentation-ready context set. A bootstrap script copies the starting issue and writes a manifest, then a Claude Code skill (`/jira-context-populate`) uses an LLM subagent to evaluate each remaining issue file and copy in only those with meaningful documentation content. A link extraction script classifies all URLs into pull requests, code repositories (derived from PR URLs), and additional links.
+
+```bash
+# Full flow via the skill:
+/jira-context-populate
+
+# Or run the scripts individually:
+python scripts/jira_context_bootstrap.py
+python scripts/jira_context_links.py
+```
+
+Output: `artifacts/jiracontext/` with curated issue files and a manifest at `artifacts/jiracontext.md`.
+
+For design rationale, the copy-in vs prune decision, testing strategy (including LLM tests), and agentskills.io compliance details, see [docs/jiracontext.md](docs/jiracontext.md).
 
 ## Low-level usage
 
