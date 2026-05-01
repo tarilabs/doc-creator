@@ -3,7 +3,7 @@ name: prcontext-populate
 description: >
   Fetch PR patches from jiracontext links, filter noise, and produce
   concise documentation-relevant summaries. Use after
-  jira-context-populate has run and artifacts/jiracontext.md contains
+  jiracontext-populate has run and artifacts/jiracontext.md contains
   a pull_requests list.
 disable-model-invocation: true
 compatibility: Requires Python 3.11+ with pyyaml, and gh CLI authenticated. Designed for Claude Code.

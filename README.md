@@ -61,11 +61,11 @@ For architecture details and design rationale, see [docs/jiraexploration.md](doc
 
 ## JIRA Context
 
-Takes the raw exploration output and produces a curated, documentation-ready context set. A bootstrap script copies the starting issue and writes a manifest, then a Claude Code skill (`/jira-context-populate`) uses an LLM subagent to evaluate each remaining issue file and copy in only those with meaningful documentation content. A link extraction script classifies all URLs into pull requests, code repositories (derived from PR URLs), and additional links.
+Takes the raw exploration output and produces a curated, documentation-ready context set. A bootstrap script copies the starting issue and writes a manifest, then a Claude Code skill (`/jiracontext-populate`) uses an LLM subagent to evaluate each remaining issue file and copy in only those with meaningful documentation content. A link extraction script classifies all URLs into pull requests, code repositories (derived from PR URLs), and additional links.
 
 ```bash
 # Full flow via the skill:
-/jira-context-populate
+/jiracontext-populate
 
 # Or run the scripts individually:
 python scripts/jira_context_bootstrap.py

@@ -1,4 +1,4 @@
-"""Tests for jira_context_bootstrap.py and the jira-context-populate skill."""
+"""Tests for jira_context_bootstrap.py and the jiracontext-populate skill."""
 import os
 import re
 import shutil
@@ -14,7 +14,7 @@ SCRIPT = os.path.join(os.path.dirname(__file__), "..", "scripts",
                       "jira_context_bootstrap.py")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SKILL_DIR = os.path.join(PROJECT_ROOT, ".claude", "skills",
-                         "jira-context-populate")
+                         "jiracontext-populate")
 SKILL_MD = os.path.join(SKILL_DIR, "SKILL.md")
 
 

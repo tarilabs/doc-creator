@@ -42,9 +42,9 @@ All lists are deduplicated and sorted. PR URLs never appear in repos, repos neve
 
 **Key insight: PR URLs imply code repositories.** A PR at `github.com/org/repo/pull/42` tells us `github.com/org/repo` is an impacted repository. This derivation is free and catches repos that might not appear as bare URLs anywhere in the content.
 
-### The skill: `jira-context-populate`
+### The skill: `jiracontext-populate`
 
-Orchestrates the full flow as a Claude Code skill (invoked via `/jira-context-populate`):
+Orchestrates the full flow as a Claude Code skill (invoked via `/jiracontext-populate`):
 
 1. Run bootstrap script
 2. Read the manifest and list files in jiraexploration
@@ -72,7 +72,7 @@ The skill follows both the [agentskills.io specification](https://agentskills.io
 
 | Requirement | How |
 |---|---|
-| `name` matches directory | `jira-context-populate/SKILL.md` with `name: jira-context-populate` |
+| `name` matches directory | `jiracontext-populate/SKILL.md` with `name: jiracontext-populate` |
 | `name` format: lowercase, hyphens, no consecutive hyphens | Validated by test |
 | `description` under 1024 chars | Describes what and when |
 | Body under 500 lines | Validated by test |
@@ -123,7 +123,7 @@ scripts/
   jira_context_bootstrap.py   # Create output dir, copy starting issue, write manifest
   jira_context_links.py       # Extract and classify links into manifest frontmatter
 
-.claude/skills/jira-context-populate/
+.claude/skills/jiracontext-populate/
   SKILL.md                    # Skill definition (5 steps)
   prompt-template.md          # Subagent prompt template (single source of truth)
 

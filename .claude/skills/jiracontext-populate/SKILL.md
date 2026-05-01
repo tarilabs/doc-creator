@@ -1,5 +1,5 @@
 ---
-name: jira-context-populate
+name: jiracontext-populate
 description: >
   Bootstrap a jiracontext directory from jiraexploration artifacts and
   selectively populate it with JIRA issue files that contribute useful
