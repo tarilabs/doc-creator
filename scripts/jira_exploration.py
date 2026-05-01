@@ -181,26 +181,22 @@ def main():
     else:
         log.warning("No RHAISTRAT ancestor found in parent chain")
 
-    # Write manifest header
-    with open(manifest, "w", encoding="utf-8") as f:
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        f.write("# JIRA Exploration\n\n")
-        f.write(f"- **Starting issue**: {args.issue_key}\n")
-        f.write(f"- **Started at**: {ts}\n")
-        f.write(f"- **Link filter**: {args.link_filter or '(none)'}\n")
-        f.write(f"- **Output directory**: {args.output_dir}\n")
-        if is_strat:
-            f.write(f"- **RHAISTRAT**: {args.issue_key} (starting issue is a STRAT)\n")
-        elif strat_key:
-            hierarchy = " → ".join(
-                [args.issue_key] + [k for k, _ in chain])
-            f.write(f"- **RHAISTRAT**: {strat_key}\n")
-            f.write(f"- **Hierarchy**: {hierarchy}\n")
-        else:
-            hierarchy = " → ".join(
-                [args.issue_key] + [k for k, _ in chain])
-            f.write(f"- **RHAISTRAT**: not found\n")
-            f.write(f"- **Hierarchy**: {hierarchy} (no RHAISTRAT ancestor)\n")
+    # Build frontmatter dict
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fm = {
+        "starting_issue": args.issue_key,
+        "started_at": ts,
+        "link_filter": args.link_filter or None,
+        "output_directory": args.output_dir,
+    }
+    if is_strat:
+        fm["rhaistrat"] = args.issue_key
+    elif strat_key:
+        fm["rhaistrat"] = strat_key
+        fm["hierarchy"] = [args.issue_key] + [k for k, _ in chain]
+    else:
+        fm["rhaistrat"] = None
+        fm["hierarchy"] = [args.issue_key] + [k for k, _ in chain]
     log.info("Wrote manifest: %s", manifest)
 
     # Fetch the RHAISTRAT if found and different from the starting issue
@@ -219,17 +215,6 @@ def main():
     if rc != 0:
         sys.exit(rc)
 
-    # Append the starting issue description to the manifest
-    issue_md = os.path.join(args.output_dir, f"{args.issue_key}.md")
-    if os.path.isfile(issue_md):
-        with open(issue_md, encoding="utf-8") as f:
-            text = f.read()
-        parts = text.split("---\n", 2)
-        body = parts[2].strip() if len(parts) >= 3 else text.strip()
-        with open(manifest, "a", encoding="utf-8") as f:
-            f.write(f"\n## {args.issue_key}\n\n")
-            f.write(body + "\n")
-
     # Collect PR URLs from Epic grandchildren
     if strat_key:
         log.info("Collecting PR URLs from Epic grandchildren of %s ...",
@@ -237,15 +222,29 @@ def main():
         pr_results = _collect_strat_prs(strat_key, args.output_dir,
                                         server, user, token)
         if pr_results:
-            all_urls = {u for _, _, urls in pr_results for u in urls}
-            with open(manifest, "a", encoding="utf-8") as f:
-                f.write(f"\n## Pull Requests\n\n")
-                f.write(f"Collected from {len(pr_results)} tasks across "
-                        f"Epics under {strat_key}.\n\n")
-                for key, summary, urls in pr_results:
-                    for url in urls:
-                        f.write(f"- {url} ({key}: {summary})\n")
-            log.info("Appended %d PR URLs to manifest", len(all_urls))
+            pr_list = []
+            for key, summary, urls in pr_results:
+                for url in urls:
+                    pr_list.append(f"{url} ({key}: {summary})")
+            fm["pull_requests"] = pr_list
+            log.info("Collected %d PR URLs", len(pr_list))
+
+    # Read the starting issue description for the manifest body
+    body = ""
+    issue_md = os.path.join(args.output_dir, f"{args.issue_key}.md")
+    if os.path.isfile(issue_md):
+        with open(issue_md, encoding="utf-8") as f:
+            text = f.read()
+        parts = text.split("---\n", 2)
+        body = parts[2].strip() if len(parts) >= 3 else text.strip()
+
+    # Write manifest: YAML frontmatter + description body
+    with open(manifest, "w", encoding="utf-8") as f:
+        f.write("---\n")
+        f.write(yaml.dump(fm, default_flow_style=False, sort_keys=False))
+        f.write("---\n\n")
+        if body:
+            f.write(body + "\n")
 
     log.info("Done — %s", args.output_dir)
 

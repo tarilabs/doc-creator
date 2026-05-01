@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import pytest
+import yaml
 
 
 SCRIPT = os.path.join(os.path.dirname(__file__), "..", "scripts",
@@ -27,6 +28,15 @@ def _run_explore(jira, issue_key, output_dir, cwd=PROJECT_ROOT):
     )
 
 
+def _parse_manifest(path):
+    """Read the manifest and return (frontmatter_dict, body_str)."""
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    assert text.startswith("---\n")
+    _, fm_raw, body = text.split("---\n", 2)
+    return yaml.safe_load(fm_raw), body.strip()
+
+
 class TestJiraExploration:
 
     def test_strat_issue_no_parent_walk(self, jira, art_dir):
@@ -39,14 +49,11 @@ class TestJiraExploration:
         result = _run_explore(jira, "RHAISTRAT-500", output_dir)
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        assert os.path.isfile(manifest)
-        with open(manifest, encoding="utf-8") as f:
-            text = f.read()
-
-        assert "**Starting issue**: RHAISTRAT-500" in text
-        assert "starting issue is a STRAT" in text
-        assert "Hierarchy" not in text
-        assert "Strategy description" in text
+        fm, body = _parse_manifest(manifest)
+        assert fm["starting_issue"] == "RHAISTRAT-500"
+        assert fm["rhaistrat"] == "RHAISTRAT-500"
+        assert "hierarchy" not in fm
+        assert "Strategy description" in body
 
         assert os.path.isfile(os.path.join(output_dir, "RHAISTRAT-500.md"))
 
@@ -64,13 +71,12 @@ class TestJiraExploration:
         result = _run_explore(jira, "RHOAIENG-800", output_dir)
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        with open(manifest, encoding="utf-8") as f:
-            text = f.read()
-
-        assert "**Starting issue**: RHOAIENG-800" in text
-        assert "**RHAISTRAT**: RHAISTRAT-600" in text
-        assert "RHOAIENG-800 → RHOAIENG-700 → RHAISTRAT-600" in text
-        assert "Leaf description" in text
+        fm, body = _parse_manifest(manifest)
+        assert fm["starting_issue"] == "RHOAIENG-800"
+        assert fm["rhaistrat"] == "RHAISTRAT-600"
+        assert fm["hierarchy"] == ["RHOAIENG-800", "RHOAIENG-700",
+                                   "RHAISTRAT-600"]
+        assert "Leaf description" in body
 
         assert os.path.isfile(os.path.join(output_dir, "RHAISTRAT-600.md"))
         assert os.path.isfile(os.path.join(output_dir, "RHOAIENG-800.md"))
@@ -87,14 +93,11 @@ class TestJiraExploration:
         result = _run_explore(jira, "RHOAIENG-901", output_dir)
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        with open(manifest, encoding="utf-8") as f:
-            text = f.read()
-
-        assert "**Starting issue**: RHOAIENG-901" in text
-        assert "**RHAISTRAT**: not found" in text
-        assert "no RHAISTRAT ancestor" in text
-        assert "RHOAIENG-901 → RHOAIENG-900" in text
-        assert "Child description" in text
+        fm, body = _parse_manifest(manifest)
+        assert fm["starting_issue"] == "RHOAIENG-901"
+        assert fm["rhaistrat"] is None
+        assert fm["hierarchy"] == ["RHOAIENG-901", "RHOAIENG-900"]
+        assert "Child description" in body
 
     def test_collects_pr_urls_from_epic_grandchildren(self, jira, art_dir):
         """PR URLs from Epic grandchildren are collected in the manifest."""
@@ -129,13 +132,12 @@ class TestJiraExploration:
         result = _run_explore(jira, "RHAISTRAT-400", output_dir)
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        with open(manifest, encoding="utf-8") as f:
-            text = f.read()
-
-        assert "## Pull Requests" in text
-        assert "https://github.com/org/repo/pull/10" in text
-        assert "https://github.com/org/other-repo/pull/20" in text
-        assert "RHOAIENG-411" in text
-        assert "RHOAIENG-412" in text
-        # Task with no PRs should not appear in the PR section
-        assert "RHOAIENG-413" not in text.split("## Pull Requests")[1]
+        fm, _ = _parse_manifest(manifest)
+        assert "pull_requests" in fm
+        pr_urls = [entry.split(" ")[0] for entry in fm["pull_requests"]]
+        assert "https://github.com/org/repo/pull/10" in pr_urls
+        assert "https://github.com/org/other-repo/pull/20" in pr_urls
+        pr_text = "\n".join(fm["pull_requests"])
+        assert "RHOAIENG-411" in pr_text
+        assert "RHOAIENG-412" in pr_text
+        assert "RHOAIENG-413" not in pr_text
