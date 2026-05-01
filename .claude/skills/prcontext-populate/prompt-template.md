@@ -79,3 +79,6 @@ DON'Ts:
 - Don't list every file changed
 - Don't speculate about changes outside the patch
 - Don't write more than 200 words total (excluding verdict reasoning)
+
+When you are done writing the output file, respond with only: "Done."
+Do NOT summarize the verdict, gist, or any PR content in your final response.
