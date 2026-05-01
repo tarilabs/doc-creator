@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import yaml
@@ -121,6 +122,8 @@ def main():
                         help="Source manifest with pull_requests list")
     parser.add_argument("--output-dir", default="artifacts/prcontext",
                         help="Output directory for patches and manifest")
+    parser.add_argument("--concurrency", type=int, default=4,
+                        help="Max parallel PR fetches (default: 4)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -142,35 +145,47 @@ def main():
     raw_dir = os.path.join(args.output_dir, "raw")
     os.makedirs(raw_dir, exist_ok=True)
 
-    entries = []
+    entries = [None] * len(pr_urls)
     failures = 0
 
-    for url in pr_urls:
+    github_tasks = []
+    for idx, url in enumerate(pr_urls):
         url = url.strip()
         parsed = parse_pr_url(url)
         if parsed:
-            owner, repo, number = parsed
-            log.info("Fetching GitHub PR: %s/%s#%d", owner, repo, number)
-            entry = _fetch_github_pr(url, owner, repo, number, raw_dir)
-            entries.append(entry)
-            if entry["status"] == "failed":
-                failures += 1
+            github_tasks.append((idx, url, *parsed))
         elif GITLAB_MR_RE.match(url):
             log.warning("Skipping GitLab MR (not yet supported): %s", url)
-            entries.append({
+            entries[idx] = {
                 "url": url,
                 "file": None,
                 "status": "skipped",
                 "reason": "GitLab MR not yet supported",
-            })
+            }
         else:
             log.warning("Unrecognised PR URL format: %s", url)
-            entries.append({
+            entries[idx] = {
                 "url": url,
                 "file": None,
                 "status": "skipped",
                 "reason": "unrecognised URL format",
-            })
+            }
+
+    workers = min(args.concurrency, len(github_tasks)) if github_tasks else 1
+    log.info("Fetching %d GitHub PRs with concurrency=%d", len(github_tasks), workers)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_idx = {}
+        for idx, url, owner, repo, number in github_tasks:
+            log.info("Queuing GitHub PR: %s/%s#%d", owner, repo, number)
+            fut = pool.submit(_fetch_github_pr, url, owner, repo, number, raw_dir)
+            future_to_idx[fut] = idx
+        for fut in as_completed(future_to_idx):
+            idx = future_to_idx[fut]
+            entry = fut.result()
+            entries[idx] = entry
+            if entry["status"] == "failed":
+                failures += 1
 
     manifest_path = os.path.normpath(args.output_dir) + ".md"
     manifest_fm = {
