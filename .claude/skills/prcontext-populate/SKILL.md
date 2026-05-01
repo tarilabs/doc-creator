@@ -35,10 +35,22 @@ python3 scripts/pr_context_filter.py
 
 Verify exit 0 before continuing.
 
+## Step 3 — Pre-classify
+
+Run the pre-classifier to add deterministic hints to the manifest:
+
+```bash
+python3 scripts/pr_context_preclassify.py
+```
+
+This adds `hint` and `hint_reason` fields to each manifest entry based
+on title patterns and file-level analysis. Exit 0 = success.
+
 ## Artifact layout
 
-The fetch and filter scripts produce this directory structure
-(under `artifacts/prcontext/` by default, or the custom output directory):
+The fetch, filter, and pre-classify scripts produce this directory
+structure (under `artifacts/prcontext/` by default, or the custom
+output directory):
 
 ```
 artifacts/prcontext/
@@ -46,30 +58,32 @@ artifacts/prcontext/
   raw/{file}.patch           # original patches from gh
   raw/{file}.meta.yaml       # PR metadata (title, body, labels, etc.)
   filtered/{file}.patch      # noise-filtered patches
-  {file}.md                  # output summaries (written in Step 4)
+  {file}.md                  # output summaries (written in Step 5)
+  verdict_check.md           # post-hoc sanity check (written in Step 6)
 ```
 
 `{file}` matches the `file` field in each manifest entry
 (e.g. `kubeflow__model-registry__2367`).
 
-## Step 3 — Prepare subagent context
+## Step 4 — Prepare subagent context
 
 Read the manifest at `artifacts/prcontext/prcontext.md` (or the custom
 output directory).
 
-Read the **documentation target** body from `artifacts/jiracontext.md`
-(everything after the closing `---`).
+Resolve the **absolute path** to `artifacts/jiracontext.md` — this will
+be passed to each subagent as `{documentation_target_file}` so the
+subagent reads the full documentation target itself.
 
 From the prcontext manifest, collect all entries where `status: fetched`.
 
-## Step 4 — Summarize each PR
+## Step 5 — Summarize each PR
 
 For each fetched PR, spawn an Agent subagent with **model: haiku**.
 
 Read the prompt template from [prompt-template.md](prompt-template.md)
 and fill in these placeholders:
 
-- `{documentation_target}` — the full body from jiracontext.md
+- `{documentation_target_file}` — the absolute path to jiracontext.md
 - `{pr_title}` — from the manifest entry's title field
 - `{pr_body}` — from `raw/{file}.meta.yaml`, body field
 - `{filtered_patch}` — contents of `filtered/{file}.patch`
@@ -77,6 +91,10 @@ and fill in these placeholders:
 - `{repo}` — owner/repo derived from URL
 - `{pr_number}` — PR number
 - `{output_file}` — `artifacts/prcontext/{file}.md`
+- `{hint_block}` — constructed from the entry's `hint` and `hint_reason`:
+  - If `hint` is `no-hint` or absent: empty string
+  - If `hint` is `candidate-peripheral`: `"\nDETERMINISTIC HINT: This PR's metadata suggests it is peripheral (reason: {hint_reason}). Evaluate this critically — override if the PR genuinely changes documented behavior.\n"`
+  - If `hint` is `candidate-noise`: `"\nDETERMINISTIC HINT: This PR's metadata suggests it is noise (reason: {hint_reason}). Evaluate this critically.\n"`
 
 If the filtered patch file is empty (0 bytes), skip the subagent.
 Instead, directly write a summary with `verdict: noise` and a one-line
@@ -84,15 +102,34 @@ explanation ("all changes were filtered as noise").
 
 Spawn subagents in parallel where possible (batch independent PRs).
 
-## Step 5 — Report
+## Step 6 — Verdict sanity check
+
+Run the post-hoc verdict check:
+
+```bash
+python3 scripts/pr_context_verdict_check.py
+```
+
+Exit 0 = clean, exit 1 = flags raised (advisory, do NOT stop),
+exit 2 = fatal.
+
+Read `artifacts/prcontext/verdict_check.md` if exit 1 to understand
+the flags. Report them in Step 7.
+
+## Step 7 — Report
 
 Read back the prcontext manifest. Count verdicts across the summary
 files (relevant / peripheral / noise). Report a summary table to the
 user:
 
 ```
-| PR | Repo | Verdict | Gist |
-|---|---|---|---|
+| PR | Repo | Verdict | Hint | Gist |
+|---|---|---|---|---|
 ```
 
-Include total counts at the bottom, and write the report to the `prcontext.md` file body.
+Include total counts at the bottom.
+
+If `verdict_check.md` exists and has `status: flagged`, include a
+**Flags** section below the table listing each flag.
+
+Write the report to the `prcontext.md` file body.

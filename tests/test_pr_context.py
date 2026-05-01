@@ -13,6 +13,8 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 FETCH_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_fetch.py")
 FILTER_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_filter.py")
+PRECLASSIFY_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_preclassify.py")
+VERDICT_CHECK_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_verdict_check.py")
 
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
@@ -385,3 +387,324 @@ class TestPrContextSkillDefinition:
 
     def test_prompt_template_exists(self):
         assert os.path.isfile(os.path.join(SKILL_DIR, "prompt-template.md"))
+
+    def test_skill_has_seven_steps(self):
+        _, body = _parse_skill_md(SKILL_MD)
+        steps = re.findall(r'^## Step \d+', body, re.MULTILINE)
+        assert len(steps) == 7, \
+            f"SKILL.md should have 7 steps, found {len(steps)}: {steps}"
+
+
+# ── Helpers for preclassify / verdict check tests ──────────────────────────
+
+def _write_manifest(directory, entries, source_manifest="artifacts/jiracontext.md"):
+    """Write a prcontext.md manifest with YAML frontmatter."""
+    prcontext_dir = os.path.join(directory, "artifacts", "prcontext")
+    os.makedirs(prcontext_dir, exist_ok=True)
+    manifest_path = os.path.join(prcontext_dir, "prcontext.md")
+    fm = {
+        "started_at": "2026-01-01T00:00:00Z",
+        "source_manifest": source_manifest,
+        "output_directory": prcontext_dir,
+        "pull_requests": entries,
+    }
+    with open(manifest_path, "w") as f:
+        f.write("---\n")
+        f.write(yaml.dump(fm, default_flow_style=False, sort_keys=False))
+        f.write("---\n")
+    return manifest_path
+
+
+def _write_meta_yaml(raw_dir, stem, files=None, title="", body=""):
+    """Write a {stem}.meta.yaml in raw_dir with the given files list."""
+    os.makedirs(raw_dir, exist_ok=True)
+    meta = {"title": title, "body": body, "files": files or []}
+    path = os.path.join(raw_dir, f"{stem}.meta.yaml")
+    with open(path, "w") as f:
+        yaml.dump(meta, f, default_flow_style=False)
+    return path
+
+
+def _write_summary(output_dir, stem, verdict, title=""):
+    """Write a {stem}.md summary file with YAML frontmatter."""
+    path = os.path.join(output_dir, f"{stem}.md")
+    fm = {"pr_url": f"https://github.com/org/repo/pull/1",
+          "repo": "org/repo", "pr_number": 1,
+          "title": title, "verdict": verdict}
+    with open(path, "w") as f:
+        f.write("---\n")
+        f.write(yaml.dump(fm, default_flow_style=False, sort_keys=False))
+        f.write("---\n\n## What changed\n\nTest.\n")
+    return path
+
+
+def _write_filtered_patch(filtered_dir, stem, content="some patch content"):
+    """Write a filtered patch file."""
+    os.makedirs(filtered_dir, exist_ok=True)
+    path = os.path.join(filtered_dir, f"{stem}.patch")
+    with open(path, "w") as f:
+        f.write(content)
+    return path
+
+
+def _run_preclassify(manifest):
+    return subprocess.run(
+        [sys.executable, PRECLASSIFY_SCRIPT, "--manifest", manifest],
+        capture_output=True, text=True,
+    )
+
+
+def _run_verdict_check(manifest, output_dir):
+    return subprocess.run(
+        [sys.executable, VERDICT_CHECK_SCRIPT,
+         "--manifest", manifest, "--output-dir", output_dir],
+        capture_output=True, text=True,
+    )
+
+
+# ── Tier 1c: Pre-classify script tests ────────────────────────────────────
+
+class TestPrContextPreclassify:
+
+    def test_fix_prefix_hints_peripheral(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched",
+                    "title": "fix: correct sort order"}]
+        manifest = _write_manifest(art_dir, entries)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__1")
+
+        result = _run_preclassify(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["pull_requests"][0]["hint"] == "candidate-peripheral"
+        assert "fix:" in fm["pull_requests"][0]["hint_reason"]
+
+    def test_test_prefix_hints_peripheral(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/2",
+                    "file": "org__repo__2", "status": "fetched",
+                    "title": "test: add source label filtering tests"}]
+        manifest = _write_manifest(art_dir, entries)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__2")
+
+        result = _run_preclassify(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["pull_requests"][0]["hint"] == "candidate-peripheral"
+
+    def test_review_comments_hints_peripheral(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/3",
+                    "file": "org__repo__3", "status": "fetched",
+                    "title": "Address review comments from #100"}]
+        manifest = _write_manifest(art_dir, entries)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__3")
+
+        result = _run_preclassify(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["pull_requests"][0]["hint"] == "candidate-peripheral"
+
+    def test_feat_prefix_no_hint(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/4",
+                    "file": "org__repo__4", "status": "fetched",
+                    "title": "feat: add MCP deployment modal"}]
+        manifest = _write_manifest(art_dir, entries)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__4")
+
+        result = _run_preclassify(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["pull_requests"][0]["hint"] == "no-hint"
+
+    def test_no_prefix_no_hint(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/5",
+                    "file": "org__repo__5", "status": "fetched",
+                    "title": "Add deploy button as extension"}]
+        manifest = _write_manifest(art_dir, entries)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__5")
+
+        result = _run_preclassify(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["pull_requests"][0]["hint"] == "no-hint"
+
+    def test_all_test_files_hints_peripheral(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/6",
+                    "file": "org__repo__6", "status": "fetched",
+                    "title": "Add Cypress mocked tests"}]
+        manifest = _write_manifest(art_dir, entries)
+        raw_dir = os.path.join(art_dir, "artifacts", "prcontext", "raw")
+        _write_meta_yaml(raw_dir, "org__repo__6", files=[
+            {"path": "tests/test_catalog.py"},
+            {"path": "tests/test_deploy.py"},
+        ])
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__6")
+
+        result = _run_preclassify(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["pull_requests"][0]["hint"] == "candidate-peripheral"
+        assert "test globs" in fm["pull_requests"][0]["hint_reason"]
+
+    def test_empty_filtered_patch_hints_noise(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/7",
+                    "file": "org__repo__7", "status": "fetched",
+                    "title": "feat: something filtered away"}]
+        manifest = _write_manifest(art_dir, entries)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__7", content="")
+
+        result = _run_preclassify(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["pull_requests"][0]["hint"] == "candidate-noise"
+
+    def test_mixed_files_no_file_hint(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/8",
+                    "file": "org__repo__8", "status": "fetched",
+                    "title": "Add feature with tests"}]
+        manifest = _write_manifest(art_dir, entries)
+        raw_dir = os.path.join(art_dir, "artifacts", "prcontext", "raw")
+        _write_meta_yaml(raw_dir, "org__repo__8", files=[
+            {"path": "src/api.go"},
+            {"path": "tests/test_api.py"},
+        ])
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__8")
+
+        result = _run_preclassify(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["pull_requests"][0]["hint"] == "no-hint"
+
+    def test_skipped_entry_gets_no_hint(self, art_dir):
+        entries = [{"url": "https://gitlab.example.com/proj/-/merge_requests/1",
+                    "file": None, "status": "skipped",
+                    "reason": "GitLab MR not yet supported"}]
+        manifest = _write_manifest(art_dir, entries)
+
+        result = _run_preclassify(manifest)
+        assert result.returncode == 0
+
+        fm, _ = _parse_manifest(manifest)
+        assert fm["pull_requests"][0]["hint"] == "no-hint"
+
+    def test_missing_manifest_exits_1(self, art_dir):
+        result = _run_preclassify(str(art_dir / "nonexistent.md"))
+        assert result.returncode == 1
+
+
+# ── Tier 1d: Verdict check script tests ───────────────────────────────────
+
+class TestPrContextVerdictCheck:
+
+    def test_mixed_verdicts_clean(self, art_dir):
+        entries = [
+            {"url": "u1", "file": "a__b__1", "status": "fetched"},
+            {"url": "u2", "file": "a__b__2", "status": "fetched"},
+            {"url": "u3", "file": "a__b__3", "status": "fetched"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_summary(out_dir, "a__b__1", "relevant")
+        _write_summary(out_dir, "a__b__2", "peripheral")
+        _write_summary(out_dir, "a__b__3", "noise")
+
+        result = _run_verdict_check(manifest, out_dir)
+        assert result.returncode == 0
+
+    def test_all_same_verdicts_flags_skew(self, art_dir):
+        entries = [
+            {"url": f"u{i}", "file": f"a__b__{i}", "status": "fetched"}
+            for i in range(6)
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        for i in range(6):
+            _write_summary(out_dir, f"a__b__{i}", "relevant")
+
+        result = _run_verdict_check(manifest, out_dir)
+        assert result.returncode == 1
+        assert "Distribution skew" in result.stderr
+
+    def test_hint_override_flags(self, art_dir):
+        entries = [
+            {"url": "u1", "file": "a__b__1", "status": "fetched",
+             "hint": "candidate-peripheral", "hint_reason": "title prefix fix:"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_summary(out_dir, "a__b__1", "relevant")
+
+        result = _run_verdict_check(manifest, out_dir)
+        assert result.returncode == 1
+        assert "Hint override" in result.stderr
+
+    def test_missing_summary_flags(self, art_dir):
+        entries = [
+            {"url": "u1", "file": "a__b__1", "status": "fetched"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+
+        result = _run_verdict_check(manifest, out_dir)
+        assert result.returncode == 1
+        assert "Missing summary" in result.stderr
+
+    def test_small_batch_no_skew_flag(self, art_dir):
+        entries = [
+            {"url": f"u{i}", "file": f"a__b__{i}", "status": "fetched"}
+            for i in range(3)
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        for i in range(3):
+            _write_summary(out_dir, f"a__b__{i}", "relevant")
+
+        result = _run_verdict_check(manifest, out_dir)
+        assert result.returncode == 0
+
+    def test_verdict_check_creates_report(self, art_dir):
+        entries = [
+            {"url": "u1", "file": "a__b__1", "status": "fetched"},
+            {"url": "u2", "file": "a__b__2", "status": "fetched"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        out_dir = os.path.join(art_dir, "artifacts", "prcontext")
+        _write_summary(out_dir, "a__b__1", "relevant")
+        _write_summary(out_dir, "a__b__2", "peripheral")
+
+        _run_verdict_check(manifest, out_dir)
+
+        report_path = os.path.join(out_dir, "verdict_check.md")
+        assert os.path.isfile(report_path)
+        fm, _ = _parse_manifest(report_path)
+        assert fm["status"] == "clean"
+        assert fm["total_fetched"] == 2
+
+    def test_missing_manifest_exits_2(self, art_dir):
+        result = _run_verdict_check(
+            str(art_dir / "nonexistent.md"),
+            str(art_dir / "artifacts" / "prcontext"))
+        assert result.returncode == 2

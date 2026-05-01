@@ -1,10 +1,11 @@
 You are summarizing a pull request for a technical writer. Be BRIEF.
 
-DOCUMENTATION TARGET (this is the feature being documented):
+DOCUMENTATION TARGET FILE: {documentation_target_file}
 
----
-{documentation_target}
----
+Read the file at the path above. This is the full feature specification
+being documented. Use the "In Scope" and "Acceptance Criteria" sections
+to judge whether a PR changes what documentation would say. PRs that
+only relate to out-of-scope or deferred items are peripheral, not relevant.
 
 PR TITLE: {pr_title}
 PR DESCRIPTION:
@@ -14,10 +15,11 @@ FILTERED PATCH (noise already removed — what remains is potentially meaningful
 ```
 {filtered_patch}
 ```
+{hint_block}
 
 OUTPUT FILE: {output_file}
 
-Write a markdown file to OUTPUT FILE with YAML frontmatter and two sections.
+Write a markdown file to OUTPUT FILE with YAML frontmatter and three sections.
 
 Frontmatter fields:
 - pr_url: {pr_url}
@@ -26,22 +28,30 @@ Frontmatter fields:
 - title: "{pr_title}"
 - verdict: relevant | peripheral | noise
 
-Verdict criteria:
-- relevant: changes that ADD or ALTER what documentation should say —
-  new UI, new API surface, new configuration, changed defaults, removed
-  capabilities, or behavior that a tech writer would describe differently
-  than before this PR
-- peripheral: changes that DON'T change what documentation would say —
-  bug fixes restoring already-intended behavior, refactoring, infrastructure,
-  plumbing, test-only changes. A tech writer would document the correct
-  behavior regardless of whether this PR existed.
-- noise: nothing documentation-worthy in the patch
+## Verdict reasoning
 
-To distinguish relevant from peripheral on bug fixes, ask: "Would the
-documentation read differently if this fix never landed?" If no (the docs
-describe the intended behavior either way), it's peripheral. If yes (the
-fix changes the interface, adds a new parameter, or alters documented
-behavior), it's relevant.
+Before choosing a verdict, evaluate this PR against ALL THREE options.
+For each, write ONE sentence stating the strongest argument for that verdict.
+
+### Case for noise
+Would a technical writer see anything documentation-worthy in this patch?
+If nothing here would appear in any user-facing document, the case is strong.
+
+### Case for peripheral
+Does this PR fix a bug, add tests, refactor internals, or make infrastructure
+changes that DON'T change what documentation would say? A bug fix restoring
+already-documented behavior is peripheral. A test-only PR is peripheral.
+A PR that "addresses review comments" from another PR is peripheral.
+Ask: "Would the documentation read differently if this fix never landed?"
+If no, it's peripheral.
+
+### Case for relevant
+Does this PR ADD or ALTER what documentation should say? New UI, new API,
+new configuration, changed defaults, removed capabilities, or behavior
+a tech writer would describe differently than before this PR.
+
+### Chosen verdict
+State which verdict wins and why in one sentence.
 
 ## What changed
 
@@ -65,4 +75,4 @@ DON'Ts:
 - Don't describe code structure, function names, or module organization
 - Don't list every file changed
 - Don't speculate about changes outside the patch
-- Don't write more than 150 words total
+- Don't write more than 200 words total (excluding verdict reasoning)
