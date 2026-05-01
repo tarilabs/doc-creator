@@ -43,8 +43,9 @@ Run the pre-classifier to add deterministic hints to the manifest:
 python3 scripts/pr_context_preclassify.py
 ```
 
-This adds `hint` and `hint_reason` fields to each manifest entry based
-on title patterns and file-level analysis. Exit 0 = success.
+This adds `hint`, `hint_reason`, and `hint_text` fields to each
+manifest entry based on title patterns and file-level analysis.
+Exit 0 = success.
 
 ## Artifact layout
 
@@ -66,45 +67,37 @@ artifacts/
 `{file}` matches the `file` field in each manifest entry
 (e.g. `kubeflow__model-registry__2367`).
 
-## Step 4 — Prepare reviewer invocations
+## Step 4 — Prepare reviewer batches
 
 Read the manifest at `artifacts/prcontext.md` (or the custom
 output directory).
 
-Resolve the following **absolute paths** (needed for reviewer args):
-- `{target}` — absolute path to `artifacts/jiracontext.md`
-- `{dir}` — absolute path to `artifacts/prcontext`
-
-From the prcontext manifest YAML frontmatter, collect all entries where
-`status: fetched`. For each entry, note only: `file`, `url`,
-`hint`, `hint_reason`. These are the only fields you need.
+From the YAML frontmatter, collect the `file` key for every entry
+where `status: fetched`.
 
 Check which filtered patches are empty (0 bytes). For those, directly
 write a summary with `verdict: noise` and a one-line explanation
-("all changes were filtered as noise"). Remove them from the list
-of entries to evaluate.
+("all changes were filtered as noise"). Remove them from the list.
 
-**DO NOT** read `meta.yaml` files, filtered patches, or PR bodies.
-The reviewers read those files themselves.
+Group the remaining keys into batches of `ceil(N/5)` keys each
+(maximum 5 batches). If N <= 5, use one key per batch.
 
-For each remaining entry, compute its hint text:
-- If `hint` is `no-hint` or absent: `none`
-- If `hint` is `candidate-peripheral`: `"DETERMINISTIC HINT: This PR's metadata suggests it is peripheral (reason: {hint_reason}). Evaluate this critically — override if the PR genuinely changes documented behavior."`
-- If `hint` is `candidate-noise`: `"DETERMINISTIC HINT: This PR's metadata suggests it is noise (reason: {hint_reason}). Evaluate this critically."`
+**DO NOT** read `meta.yaml` files, filtered patches, PR bodies, or
+hint fields. The reviewer reads those itself from the manifest.
 
 ## Step 5 — Dispatch PR reviewers
 
-For each entry from Step 4, invoke the `pr-reviewer` skill:
+For each batch from Step 4, invoke the `pr-reviewer` skill:
 
 ```
-/pr-reviewer --target {target} --dir {dir} --key {file} --url {url} --hint {hint_text}
+/pr-reviewer key1 key2 key3 key4 key5
 ```
 
-Invoke ALL pr-reviewer skills in a SINGLE message.
+Invoke ALL batches in a SINGLE message.
 
 **DO NOT** reason about PR content, titles, or verdicts. Verdict
-judgment is the reviewer's job. Your job is mechanical: compute the
-arguments and dispatch all reviewers.
+judgment is the reviewer's job. Your job is mechanical: group keys
+and dispatch.
 
 ## Step 6 — Verdict sanity check
 

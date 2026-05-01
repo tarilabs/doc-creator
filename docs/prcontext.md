@@ -106,13 +106,13 @@ The first run also suffered from the orchestrator compressing the ~5KB documenta
 
 ## Results: before and after
 
-| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) | Sixth run (v2, 22 PRs, batched) | Seventh run (22 PRs, Skill dispatch) |
-|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|--------------------------------|--------------------------------------|
-| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) | 12 (55%) | 12 (55%) |
-| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) | 6 (27%) | 8 (36%) |
-| Noise | 0 | 0 | 0 | 0 | 1 (5%) | 4 (18%) | 2 (9%) |
-| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered | not triggered | not triggered |
-| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) | 2 (both justified) | 2 (both justified) |
+| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) | Sixth run (v2, 22 PRs, batched) | Seventh run (22 PRs, Skill dispatch) | Eighth run (Skill batched dispatch) |
+|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|--------------------------------|--------------------------------------|--------------------------------------|
+| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) | 12 (55%) | 12 (55%) | 16 (73%) |
+| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) | 6 (27%) | 8 (36%) | 5 (23%) |
+| Noise | 0 | 0 | 0 | 0 | 1 (5%) | 4 (18%) | 2 (9%) | 1 (5%) |
+| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered | not triggered | not triggered | not triggered |
+| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) | 2 (both justified) | 2 (both justified) | 5 (all justified) |
 
 The second run's 6 peripheral PRs: Cypress tests (#7126), test verification (#1285), UX polish (#7131), route refactoring (#7072), review follow-up (#7082), and YAML simplification (#7063). All correctly identified as not changing what documentation would say.
 
@@ -138,7 +138,35 @@ Observations specific to the Skill dispatch model:
 - **No batching.** Each PR got its own dedicated Skill invocation rather than being batched with others. This means 22 independent LLM evaluations, each reading the full `jiracontext.md` target spec. More isolated (zero cross-PR contamination risk) but more total LLM calls.
 - **YAML quoting still unfixed.** Same frontmatter parsing failure as run 6. The prompt template still doesn't show quoted examples for fields that may contain colons. This is now a two-run regression — it should be fixed before run 8.
 
-### Dispatch model comparison (runs 6 vs 7)
+The eighth run (22 PRs, same JIRA source) combined Skill dispatch with batching — 5 Skill invocations of `/pr-reviewer key1 key2 ...` with ~4-5 keys each, all dispatched in a single message. Results: 16 relevant (73%), 5 peripheral (23%), 1 noise (5%) — identical to run 5's distribution and a notable swing from runs 6-7 (both 55% relevant). The hint override count rose to 5 (all five model-registry `fix()` PRs judged relevant), returning to run 2-3 behavior where the reviewer recognized these "fixes" as implementing new functionality in a v1 feature.
+
+Observations specific to the Skill-batched dispatch model:
+- **Batch 5 misfired twice.** The smallest batch (2 keys: #7131 and #1285) failed to produce verdict files on two consecutive dispatches. Both times the Skill returned output describing the project's refactoring history instead of evaluating the PRs. Only individual Skill dispatch (one key per call) succeeded on the third attempt. Hypothesis: with only 2 positional args and no other batch context, the pr-reviewer skill may have too little signal to anchor on the evaluation task. The 4-5 key batches all succeeded on first attempt. This suggests a minimum batch size of ~3 keys for reliable Skill-based evaluation, or that single-key dispatch (run 7 style) is paradoxically more reliable than small-batch dispatch.
+- **YAML quoting bug: third consecutive run.** The `gist` field in #7063's verdict file contained an unquoted `spec:`, breaking the verdict check script. The pr-reviewer SKILL.md already states "All string values that contain colons MUST be quoted with double quotes" — but this constraint targets `title` explicitly while only implying `gist`. The subagent quotes `title` reliably (run 6 fixed that) but doesn't extend the same discipline to `gist`. The DON'T list should explicitly call out gist quoting, or a post-processing script should enforce it.
+- **Verdict variance between dispatch models.** Runs 5 and 8 (both 16R/5P/1N) used different dispatch models (run 5: individual Agent per PR; run 8: Skill batched) but produced identical distributions. Runs 6-7 (both 12R) used Agent batching and individual Skill dispatch respectively, and also matched each other. This suggests that dispatch model affects verdict quality less than other factors (prompt template version, model temperature, context ordering), but the sample is too small to confirm.
+- **Wall-clock time still dominated by sequential collection.** Despite concurrent forked execution across 5 Skill calls, the orchestrator blocked until all 5 returned. The retry cycle for batch 5 added ~3 minutes to the total. Deterministic steps completed in ~25s; verdict evaluation + retries took ~5-6 minutes total.
+
+### Dispatch model comparison (runs 6 vs 7 vs 8)
+
+The three dispatch models each have distinct trade-offs:
+
+| Aspect | Run 6 (Agent batching) | Run 7 (Skill per-PR) | Run 8 (Skill batching) |
+|--------|----------------------|---------------------|----------------------|
+| Tool used | Agent (5 calls × ~4 PRs) | Skill (22 calls × 1 PR) | Skill (5 calls × ~4 PRs) |
+| Dispatch mechanism | `run_in_background: true` | Forked execution | Forked execution |
+| Concurrent execution | Yes (async notifications) | Yes (forked) | Yes (forked) |
+| Result collection | Async (notifications) | Sequential (blocked) | Sequential (blocked) |
+| Inter-dispatch lag | ~1-2s per Agent call | Negligible | Negligible |
+| Cross-PR contamination | Possible within batch | None | Possible within batch |
+| Total LLM evaluations | 5 (batched) | 22 (individual) | 5 (batched) |
+| Small-batch reliability | Unknown | N/A (always 1) | Failed at 2-key batch |
+| Verdict quality | 12R/6P/4N | 12R/8P/2N | 16R/5P/1N |
+| YAML quoting failures | 1 | 1 | 1 |
+| Retries needed | 0 | 0 | 2 (for 1 batch) |
+
+Key takeaway: the Skill-batched model (run 8) combines the token efficiency of Agent batching (5 LLM evaluations) with the lower dispatch overhead of Skill forking (no per-call spawn latency), but inherits a new failure mode — small batches can misfire, requiring retries that erode the wall-clock advantage. The reliability threshold appears to be ~3 keys per batch.
+
+### Dispatch model comparison (runs 6 vs 7, original analysis)
 
 | Aspect | Run 6 (Agent batching) | Run 7 (Skill per-PR) |
 |--------|----------------------|---------------------|
@@ -344,7 +372,8 @@ Potential directions discussed but not yet implemented:
 
 - ~~**Report script (`pr_context_report.py`)**~~ — **done** (run 5). Reads YAML frontmatter from summary files, generates the markdown verdict table, and appends flags from verdict check. The orchestrator calls the script and relays output — zero file reads, zero content parsing.
 - ~~**Subagent batching**~~ — **done** (run 6). Prompt template and skill rewritten to batch ~4-5 PRs per Agent call (see Option B above). Reduces dispatch from ~22 calls to ~5.
-- **YAML frontmatter quoting enforcement** — add explicit quoting examples to the prompt template's frontmatter spec (`title: "..."`, `gist: "..."`), or add a post-processing script that validates/fixes frontmatter before downstream consumption. Run 6 surfaced the first parsing failure from an unquoted colon in a title field.
+- **YAML frontmatter quoting enforcement** — add explicit quoting examples to the prompt template's frontmatter spec (`title: "..."`, `gist: "..."`), or add a post-processing script that validates/fixes frontmatter before downstream consumption. Three consecutive runs (6, 7, 8) have surfaced parsing failures — run 6 from an unquoted `title`, runs 7-8 from unquoted `gist` containing colons. The `title` fix landed but `gist` remains unprotected. A deterministic post-processing script (validate + auto-quote YAML string fields) would close this permanently without relying on LLM compliance.
+- **Minimum batch size guard** — run 8 showed that 2-key Skill batches can misfire (skill misinterprets task). Either enforce a minimum of 3 keys per batch, or fall back to individual dispatch for remainder batches. The batching formula `ceil(N/5)` already produces batches of 4-5 for N=22, but the remainder batch (N mod batch_size) can be arbitrarily small.
 - **Cypress/E2E test glob expansion** — the current `TEST_GLOBS` miss Cypress-style paths (`packages/cypress/cypress/*.ts`), causing test-only PRs like #7126 to pass through to LLM evaluation without a hint
 - **Verdict confidence scoring** — the comparative evaluation produces reasoning; a second pass could score confidence (high/medium/low) based on how close the peripheral vs relevant arguments are
 - **Cross-PR deduplication** — PRs that implement the same feature incrementally (e.g., #6747 adds mock endpoints, #6990 replaces them with real ones) could be grouped to avoid redundant documentation impact bullets

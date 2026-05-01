@@ -386,8 +386,10 @@ class TestPrContextSkillDefinition:
             assert os.path.isfile(script_path), \
                 f"Referenced script {script_ref} does not exist"
 
-    def test_prompt_template_exists(self):
-        assert os.path.isfile(os.path.join(SKILL_DIR, "prompt-template.md"))
+    def test_pr_reviewer_skill_exists(self):
+        pr_reviewer_dir = os.path.join(
+            PROJECT_ROOT, ".claude", "skills", "pr-reviewer")
+        assert os.path.isfile(os.path.join(pr_reviewer_dir, "SKILL.md"))
 
     def test_skill_has_seven_steps(self):
         _, body = _parse_skill_md(SKILL_MD)
@@ -474,6 +476,33 @@ def _run_report(manifest, output_dir=None):
 
 # ── Tier 1c: Pre-classify script tests ────────────────────────────────────
 
+from pr_context_preclassify import expand_hint_text
+
+
+class TestExpandHintText:
+
+    def test_no_hint_returns_none(self):
+        assert expand_hint_text("no-hint", None) is None
+
+    def test_absent_hint_returns_none(self):
+        assert expand_hint_text(None, None) is None
+
+    def test_candidate_peripheral(self):
+        result = expand_hint_text("candidate-peripheral", "title prefix fix:")
+        assert result.startswith("DETERMINISTIC HINT")
+        assert "peripheral" in result
+        assert "title prefix fix:" in result
+
+    def test_candidate_noise(self):
+        result = expand_hint_text("candidate-noise", "filtered patch empty")
+        assert result.startswith("DETERMINISTIC HINT")
+        assert "noise" in result
+        assert "filtered patch empty" in result
+
+    def test_unknown_hint_returns_none(self):
+        assert expand_hint_text("something-else", "reason") is None
+
+
 class TestPrContextPreclassify:
 
     def test_fix_prefix_hints_peripheral(self, art_dir):
@@ -491,6 +520,8 @@ class TestPrContextPreclassify:
         fm, _ = _parse_manifest(manifest)
         assert fm["pull_requests"][0]["hint"] == "candidate-peripheral"
         assert "fix:" in fm["pull_requests"][0]["hint_reason"]
+        assert "DETERMINISTIC HINT" in fm["pull_requests"][0]["hint_text"]
+        assert "peripheral" in fm["pull_requests"][0]["hint_text"]
 
     def test_test_prefix_hints_peripheral(self, art_dir):
         entries = [{"url": "https://github.com/org/repo/pull/2",
@@ -536,6 +567,7 @@ class TestPrContextPreclassify:
 
         fm, _ = _parse_manifest(manifest)
         assert fm["pull_requests"][0]["hint"] == "no-hint"
+        assert "hint_text" not in fm["pull_requests"][0]
 
     def test_no_prefix_no_hint(self, art_dir):
         entries = [{"url": "https://github.com/org/repo/pull/5",
@@ -551,6 +583,7 @@ class TestPrContextPreclassify:
 
         fm, _ = _parse_manifest(manifest)
         assert fm["pull_requests"][0]["hint"] == "no-hint"
+        assert "hint_text" not in fm["pull_requests"][0]
 
     def test_all_test_files_hints_peripheral(self, art_dir):
         entries = [{"url": "https://github.com/org/repo/pull/6",
@@ -587,6 +620,8 @@ class TestPrContextPreclassify:
 
         fm, _ = _parse_manifest(manifest)
         assert fm["pull_requests"][0]["hint"] == "candidate-noise"
+        assert "DETERMINISTIC HINT" in fm["pull_requests"][0]["hint_text"]
+        assert "noise" in fm["pull_requests"][0]["hint_text"]
 
     def test_mixed_files_no_file_hint(self, art_dir):
         entries = [{"url": "https://github.com/org/repo/pull/8",

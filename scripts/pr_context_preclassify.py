@@ -84,6 +84,24 @@ def classify_by_files(meta_path, filtered_patch_path):
     return None, None
 
 
+def expand_hint_text(hint, hint_reason):
+    """Expand a hint/reason pair into the full text shown to the reviewer."""
+    if not hint or hint == "no-hint":
+        return None
+    if hint == "candidate-peripheral":
+        return (
+            f"DETERMINISTIC HINT: This PR's metadata suggests it is "
+            f"peripheral (reason: {hint_reason}). Evaluate this critically "
+            f"— override if the PR genuinely changes documented behavior."
+        )
+    if hint == "candidate-noise":
+        return (
+            f"DETERMINISTIC HINT: This PR's metadata suggests it is "
+            f"noise (reason: {hint_reason}). Evaluate this critically."
+        )
+    return None
+
+
 def classify_entry(entry, raw_dir, filtered_dir):
     """Return (hint, hint_reason) for a single manifest entry."""
     if entry.get("status") != "fetched":
@@ -153,6 +171,11 @@ def main():
         entry["hint"] = hint
         if reason:
             entry["hint_reason"] = reason
+        hint_text = expand_hint_text(hint, reason)
+        if hint_text:
+            entry["hint_text"] = hint_text
+        else:
+            entry.pop("hint_text", None)
         counts[hint] = counts.get(hint, 0) + 1
         if hint != "no-hint":
             log.info("%s → %s (%s)", entry.get("file", "?"), hint, reason)
