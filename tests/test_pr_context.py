@@ -1,4 +1,5 @@
 """Tests for pr_context_fetch.py, pr_context_filter.py, and prcontext-populate skill."""
+import json
 import os
 import re
 import subprocess
@@ -16,6 +17,7 @@ FILTER_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_filter.py")
 PRECLASSIFY_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_preclassify.py")
 VERDICT_CHECK_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_verdict_check.py")
 REPORT_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_report.py")
+PREPARE_SCRIPT = os.path.join(SCRIPTS_DIR, "pr_context_prepare.py")
 
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
@@ -386,10 +388,8 @@ class TestPrContextSkillDefinition:
             assert os.path.isfile(script_path), \
                 f"Referenced script {script_ref} does not exist"
 
-    def test_pr_reviewer_skill_exists(self):
-        pr_reviewer_dir = os.path.join(
-            PROJECT_ROOT, ".claude", "skills", "pr-reviewer")
-        assert os.path.isfile(os.path.join(pr_reviewer_dir, "SKILL.md"))
+    def test_prompt_template_exists(self):
+        assert os.path.isfile(os.path.join(SKILL_DIR, "prompt-template.md"))
 
     def test_skill_has_seven_steps(self):
         _, body = _parse_skill_md(SKILL_MD)
@@ -895,3 +895,190 @@ class TestPrContextReport:
         assert fm["started_at"] == "2026-01-01T00:00:00Z"
         assert fm["source_manifest"] == "artifacts/jiracontext.md"
         assert len(fm["pull_requests"]) == 1
+
+
+# ── Tier 1f: Prepare script tests ─────────────────────────────────────────
+
+def _run_prepare(manifest, target=None, template=None):
+    cmd = [sys.executable, PREPARE_SCRIPT, "--manifest", manifest]
+    if target:
+        cmd.extend(["--target", target])
+    if template:
+        cmd.extend(["--template", template])
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def _write_target(directory, content="---\nscope: test\n---\nDoc target.\n"):
+    """Write a jiracontext.md documentation target file."""
+    path = os.path.join(directory, "artifacts", "jiracontext.md")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+    return path
+
+
+def _write_template(directory, content=None):
+    """Write a minimal prompt template with placeholders."""
+    if content is None:
+        content = ("Target: {documentation_target_file}\n\n"
+                   "{pr_entries}\n")
+    path = os.path.join(directory, "template.md")
+    with open(path, "w") as f:
+        f.write(content)
+    return path
+
+
+class TestPrContextPrepare:
+
+    def test_single_pr_produces_one_batch(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched",
+                    "title": "Add feature X"}]
+        manifest = _write_manifest(art_dir, entries)
+        target = _write_target(art_dir)
+        template = _write_template(art_dir)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__1")
+
+        result = _run_prepare(manifest, target=target, template=template)
+        assert result.returncode == 0
+
+        output = json.loads(result.stdout.strip())
+        assert len(output["batches"]) == 1
+        assert output["noise_written"] == 0
+        assert os.path.isfile(output["batches"][0])
+
+    def test_empty_patch_writes_noise_summary(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched",
+                    "title": "All noise"}]
+        manifest = _write_manifest(art_dir, entries)
+        target = _write_target(art_dir)
+        template = _write_template(art_dir)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__1", content="")
+
+        result = _run_prepare(manifest, target=target, template=template)
+        assert result.returncode == 0
+
+        output = json.loads(result.stdout.strip())
+        assert output["noise_written"] == 1
+        assert len(output["batches"]) == 0
+
+        summary_path = os.path.join(
+            art_dir, "artifacts", "prcontext", "org__repo__1.md")
+        assert os.path.isfile(summary_path)
+        fm, _ = _parse_manifest(summary_path)
+        assert fm["verdict"] == "noise"
+
+    def test_batching_produces_max_5_batches(self, art_dir):
+        entries = [
+            {"url": f"https://github.com/org/repo/pull/{i}",
+             "file": f"org__repo__{i}", "status": "fetched",
+             "title": f"PR {i}"}
+            for i in range(12)
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        target = _write_target(art_dir)
+        template = _write_template(art_dir)
+        filtered_dir = os.path.join(
+            art_dir, "artifacts", "prcontext", "filtered")
+        for i in range(12):
+            _write_filtered_patch(filtered_dir, f"org__repo__{i}")
+
+        result = _run_prepare(manifest, target=target, template=template)
+        assert result.returncode == 0
+
+        output = json.loads(result.stdout.strip())
+        assert len(output["batches"]) <= 5
+
+    def test_prompt_file_contains_template_content(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/42",
+                    "file": "org__repo__42", "status": "fetched",
+                    "title": "Add MCP feature"}]
+        manifest = _write_manifest(art_dir, entries)
+        target = _write_target(art_dir)
+        template = _write_template(art_dir)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__42")
+
+        result = _run_prepare(manifest, target=target, template=template)
+        assert result.returncode == 0
+
+        output = json.loads(result.stdout.strip())
+        with open(output["batches"][0]) as f:
+            content = f.read()
+        assert "Target:" in content
+        assert "{documentation_target_file}" not in content
+        assert "{pr_entries}" not in content
+        assert "org/repo" in content
+        assert "42" in content
+        assert "Add MCP feature" in content
+
+    def test_hint_text_appears_in_prompt(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched",
+                    "title": "fix: something",
+                    "hint_text": "DETERMINISTIC HINT: peripheral"}]
+        manifest = _write_manifest(art_dir, entries)
+        target = _write_target(art_dir)
+        template = _write_template(art_dir)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__1")
+
+        result = _run_prepare(manifest, target=target, template=template)
+        assert result.returncode == 0
+
+        output = json.loads(result.stdout.strip())
+        with open(output["batches"][0]) as f:
+            content = f.read()
+        assert "DETERMINISTIC HINT: peripheral" in content
+
+    def test_no_hint_text_uses_none(self, art_dir):
+        entries = [{"url": "https://github.com/org/repo/pull/1",
+                    "file": "org__repo__1", "status": "fetched",
+                    "title": "Add feature"}]
+        manifest = _write_manifest(art_dir, entries)
+        target = _write_target(art_dir)
+        template = _write_template(art_dir)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__1")
+
+        result = _run_prepare(manifest, target=target, template=template)
+        assert result.returncode == 0
+
+        output = json.loads(result.stdout.strip())
+        with open(output["batches"][0]) as f:
+            content = f.read()
+        assert "hint_block: (none)" in content
+
+    def test_skipped_entries_ignored(self, art_dir):
+        entries = [
+            {"url": "https://github.com/org/repo/pull/1",
+             "file": "org__repo__1", "status": "fetched",
+             "title": "Add X"},
+            {"url": "https://gitlab.example.com/proj/-/merge_requests/1",
+             "file": None, "status": "skipped",
+             "reason": "GitLab MR not yet supported"},
+        ]
+        manifest = _write_manifest(art_dir, entries)
+        target = _write_target(art_dir)
+        template = _write_template(art_dir)
+        _write_filtered_patch(
+            os.path.join(art_dir, "artifacts", "prcontext", "filtered"),
+            "org__repo__1")
+
+        result = _run_prepare(manifest, target=target, template=template)
+        assert result.returncode == 0
+
+        output = json.loads(result.stdout.strip())
+        assert len(output["batches"]) == 1
+
+    def test_missing_manifest_exits_2(self, art_dir):
+        result = _run_prepare(str(art_dir / "nonexistent.md"))
+        assert result.returncode == 2

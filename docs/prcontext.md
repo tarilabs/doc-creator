@@ -19,7 +19,8 @@ Following the CLAUDE.md principle "constrain creativity — prefer buttons over 
 | 1. Fetch | deterministic | `pr_context_fetch.py` |
 | 2. Filter | deterministic | `pr_context_filter.py` |
 | 3. Pre-classify | deterministic | `pr_context_preclassify.py` |
-| 4-5. Summarize | LLM (haiku) | subagents via skill |
+| 4. Prepare batches | deterministic | `pr_context_prepare.py` |
+| 5. Summarize | LLM (haiku) | subagents via skill |
 | 6. Verdict check | deterministic | `pr_context_verdict_check.py` |
 | 7. Report | deterministic | `pr_context_report.py` |
 
@@ -59,6 +60,16 @@ Adds a deterministic `hint` field to each manifest entry before LLM evaluation. 
 **Priority:** noise > file-level > title-level > `no-hint`.
 
 **Design insight:** The `fix:` prefix is a weak signal. In a first release (like MCP Catalog v1), many PRs titled `fix:` actually implement *new* functionality that was never working before — they're relevant, not peripheral. The pre-classifier flags them as candidates, but the LLM evaluates the actual patch content against the documentation target to decide. In our test run, 6 of 8 `candidate-peripheral` hints were overridden to `relevant` — correctly, because the "fixes" introduced new API surface or metadata fields.
+
+### `pr_context_prepare.py`
+
+Groups PRs into batches, fills the prompt template, and writes one `.prompt.md` file per batch to `artifacts/prcontext/`. PRs with empty filtered patches get a noise summary written directly (no LLM needed). Remaining PRs are distributed into ≤5 batches of roughly equal size.
+
+The script reads `prompt-template.md` from the skill directory and replaces placeholders with per-PR metadata (file paths, hint blocks, titles, URLs). Each batch prompt is self-contained — the subagent reads the file as its complete instructions.
+
+Outputs a JSON summary to stdout: `{"batches": ["artifacts/prcontext/batch_0.prompt.md", ...], "noise_written": N}`. The orchestrator parses this to get batch file paths for dispatch — zero batching logic or template filling in the orchestrator.
+
+**Design principle:** This script is the culmination of anti-patterns 1-2. The orchestrator no longer builds prompts (anti-pattern 1) or reasons about grouping (anti-pattern 2). The script makes all grouping and template decisions deterministically; the orchestrator reads JSON and dispatches.
 
 ### `pr_context_verdict_check.py`
 
@@ -106,13 +117,13 @@ The first run also suffered from the orchestrator compressing the ~5KB documenta
 
 ## Results: before and after
 
-| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) | Sixth run (v2, 22 PRs, batched) | Seventh run (22 PRs, Skill dispatch) | Eighth run (Skill batched dispatch) |
-|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|--------------------------------|--------------------------------------|--------------------------------------|
-| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) | 12 (55%) | 12 (55%) | 16 (73%) |
-| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) | 6 (27%) | 8 (36%) | 5 (23%) |
-| Noise | 0 | 0 | 0 | 0 | 1 (5%) | 4 (18%) | 2 (9%) | 1 (5%) |
-| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered | not triggered | not triggered | not triggered |
-| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) | 2 (both justified) | 2 (both justified) | 5 (all justified) |
+| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) | Sixth run (v2, 22 PRs, batched) | Seventh run (22 PRs, Skill dispatch) | Eighth run (Skill batched dispatch) | Ninth run (prepare script + Agent batch) |
+|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|--------------------------------|--------------------------------------|--------------------------------------|------------------------------------------|
+| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) | 12 (55%) | 12 (55%) | 16 (73%) | 15 (68%) |
+| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) | 6 (27%) | 8 (36%) | 5 (23%) | 7 (32%) |
+| Noise | 0 | 0 | 0 | 0 | 1 (5%) | 4 (18%) | 2 (9%) | 1 (5%) | 0 |
+| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered | not triggered | not triggered | not triggered | not triggered |
+| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) | 2 (both justified) | 2 (both justified) | 5 (all justified) | 4 (all justified) |
 
 The second run's 6 peripheral PRs: Cypress tests (#7126), test verification (#1285), UX polish (#7131), route refactoring (#7072), review follow-up (#7082), and YAML simplification (#7063). All correctly identified as not changing what documentation would say.
 
@@ -146,25 +157,38 @@ Observations specific to the Skill-batched dispatch model:
 - **Verdict variance between dispatch models.** Runs 5 and 8 (both 16R/5P/1N) used different dispatch models (run 5: individual Agent per PR; run 8: Skill batched) but produced identical distributions. Runs 6-7 (both 12R) used Agent batching and individual Skill dispatch respectively, and also matched each other. This suggests that dispatch model affects verdict quality less than other factors (prompt template version, model temperature, context ordering), but the sample is too small to confirm.
 - **Wall-clock time still dominated by sequential collection.** Despite concurrent forked execution across 5 Skill calls, the orchestrator blocked until all 5 returned. The retry cycle for batch 5 added ~3 minutes to the total. Deterministic steps completed in ~25s; verdict evaluation + retries took ~5-6 minutes total.
 
-### Dispatch model comparison (runs 6 vs 7 vs 8)
+The ninth run (22 PRs, same JIRA source) introduced `pr_context_prepare.py` — a new deterministic script for Step 4 that handles batch grouping, prompt template filling, and noise summary writing. The orchestrator no longer builds prompts; it reads the script's JSON output to get batch file paths, then reads each file and dispatches it as an Agent prompt. Results: 15 relevant (68%), 7 peripheral (32%), 0 noise — matching run 4's distribution exactly. The 4 hint overrides (#2367, #2432, #2433, #7021) were all justified: sort/filter fixes that implement new documented behavior in a v1 feature.
 
-The three dispatch models each have distinct trade-offs:
+The 7 peripheral PRs: microcopy updates (#2420), sort-by-name fix (#2442), securityIndicators refactor (#2461), route refactoring (#7072), review follow-up (#7082), Cypress tests (#7126), test verification (#1285). Notably, #2461 returned to peripheral (matching run 6) after being relevant in runs 2-3 and 5 — the subagent correctly identified it as internal field reorganization with no API surface change.
 
-| Aspect | Run 6 (Agent batching) | Run 7 (Skill per-PR) | Run 8 (Skill batching) |
-|--------|----------------------|---------------------|----------------------|
-| Tool used | Agent (5 calls × ~4 PRs) | Skill (22 calls × 1 PR) | Skill (5 calls × ~4 PRs) |
-| Dispatch mechanism | `run_in_background: true` | Forked execution | Forked execution |
-| Concurrent execution | Yes (async notifications) | Yes (forked) | Yes (forked) |
-| Result collection | Async (notifications) | Sequential (blocked) | Sequential (blocked) |
-| Inter-dispatch lag | ~1-2s per Agent call | Negligible | Negligible |
-| Cross-PR contamination | Possible within batch | None | Possible within batch |
-| Total LLM evaluations | 5 (batched) | 22 (individual) | 5 (batched) |
-| Small-batch reliability | Unknown | N/A (always 1) | Failed at 2-key batch |
-| Verdict quality | 12R/6P/4N | 12R/8P/2N | 16R/5P/1N |
-| YAML quoting failures | 1 | 1 | 1 |
-| Retries needed | 0 | 0 | 2 (for 1 batch) |
+Observations specific to the prepare-script + Agent dispatch model:
+- **Deterministic prompt building eliminates orchestrator reasoning.** The `pr_context_prepare.py` script groups PRs into ≤5 batches, fills the prompt template with file paths and hint blocks, and writes one `.prompt.md` file per batch. The orchestrator's job reduced to: parse JSON, read files, dispatch agents. Zero template logic, zero batching decisions. This closes the gap between "the orchestrator is a router" (CLAUDE.md principle) and what actually happens.
+- **All 5 batches dispatched in a single message.** Unlike run 6 (where the orchestrator split 4+1), this run correctly launched all 5 Agent calls in one message. The prepare script's JSON output made this mechanical — the orchestrator iterated a list rather than reasoning about grouping.
+- **Agent spawn latency still perceptible but acceptable.** The user observed that individual agent bootstraps were not fast — each Agent call incurs visible ~1-2s dispatch overhead. But with only 5 calls (vs 22 in pre-batching runs), the total dispatch phase was ~10s. Subagent execution took ~65s wall-clock (bounded by the slowest batch at 64.7s). Total pipeline time including YAML fixes: ~2.5 minutes.
+- **YAML frontmatter quoting: fourth consecutive run.** Two files (#7131 and #1285) had unquoted `title` fields containing colons, breaking the verdict check script. Both required manual fixes. The prompt template instructs quoting but subagents remain inconsistent. This reinforces the case for a deterministic post-processing script to validate/auto-quote YAML string fields — relying on LLM compliance after four consecutive failures is not a viable strategy.
+- **Token usage varied by batch size and patch complexity.** Batch 2 (PRs #6907, #6910, #6977, #6982, #6990 — the core MCP deployment UI PRs with the largest patches) consumed 142K tokens. Batch 0 and batch 4 used ~46K tokens each. The 3x variance suggests token cost is driven by patch size more than PR count per batch.
 
-Key takeaway: the Skill-batched model (run 8) combines the token efficiency of Agent batching (5 LLM evaluations) with the lower dispatch overhead of Skill forking (no per-call spawn latency), but inherits a new failure mode — small batches can misfire, requiring retries that erode the wall-clock advantage. The reliability threshold appears to be ~3 keys per batch.
+### Dispatch model comparison (runs 6 vs 7 vs 8 vs 9)
+
+The four dispatch models each have distinct trade-offs:
+
+| Aspect | Run 6 (Agent batching) | Run 7 (Skill per-PR) | Run 8 (Skill batching) | Run 9 (prepare script + Agent) |
+|--------|----------------------|---------------------|----------------------|-------------------------------|
+| Tool used | Agent (5 calls × ~4 PRs) | Skill (22 calls × 1 PR) | Skill (5 calls × ~4 PRs) | Agent (5 calls × ~4 PRs) |
+| Prompt building | Orchestrator (inline) | Orchestrator (inline) | Orchestrator (inline) | Deterministic script |
+| Dispatch mechanism | `run_in_background: true` | Forked execution | Forked execution | Foreground (parallel) |
+| Concurrent execution | Yes (async notifications) | Yes (forked) | Yes (forked) | Yes (parallel Agent calls) |
+| Result collection | Async (notifications) | Sequential (blocked) | Sequential (blocked) | Parallel (all in one message) |
+| Inter-dispatch lag | ~1-2s per Agent call | Negligible | Negligible | ~1-2s per Agent call |
+| Cross-PR contamination | Possible within batch | None | Possible within batch | Possible within batch |
+| Total LLM evaluations | 5 (batched) | 22 (individual) | 5 (batched) | 5 (batched) |
+| Small-batch reliability | Unknown | N/A (always 1) | Failed at 2-key batch | Succeeded at 2-PR batch |
+| Verdict quality | 12R/6P/4N | 12R/8P/2N | 16R/5P/1N | 15R/7P/0N |
+| YAML quoting failures | 1 | 1 | 1 | 2 |
+| Retries needed | 0 | 0 | 2 (for 1 batch) | 0 |
+| Orchestrator reasoning | Moderate (batching logic) | Low (metadata only) | Moderate (batching logic) | Minimal (read JSON, dispatch) |
+
+Key takeaway: run 9's prepare-script model achieves the cleanest separation of concerns — the deterministic script owns all batching and prompt-building logic, leaving the orchestrator as a pure dispatcher. Agent spawn latency remains the main UX cost (~10s for 5 calls), but the 2-PR batch that failed in run 8 (Skill dispatch) succeeded here (Agent dispatch), suggesting Agent-based evaluation is more robust for small batches. The YAML quoting bug persists across all dispatch models and needs a deterministic fix.
 
 ### Dispatch model comparison (runs 6 vs 7, original analysis)
 
@@ -224,6 +248,7 @@ scripts/
   pr_context_fetch.py          # Download patches and metadata via gh
   pr_context_filter.py         # Strip noise hunks from patches
   pr_context_preclassify.py    # Add deterministic hints to manifest
+  pr_context_prepare.py        # Group PRs into batches, build prompt files
   pr_context_verdict_check.py  # Post-hoc sanity check on verdicts
   pr_context_report.py         # Generate verdict table from summary frontmatter
 
@@ -372,8 +397,9 @@ Potential directions discussed but not yet implemented:
 
 - ~~**Report script (`pr_context_report.py`)**~~ — **done** (run 5). Reads YAML frontmatter from summary files, generates the markdown verdict table, and appends flags from verdict check. The orchestrator calls the script and relays output — zero file reads, zero content parsing.
 - ~~**Subagent batching**~~ — **done** (run 6). Prompt template and skill rewritten to batch ~4-5 PRs per Agent call (see Option B above). Reduces dispatch from ~22 calls to ~5.
-- **YAML frontmatter quoting enforcement** — add explicit quoting examples to the prompt template's frontmatter spec (`title: "..."`, `gist: "..."`), or add a post-processing script that validates/fixes frontmatter before downstream consumption. Three consecutive runs (6, 7, 8) have surfaced parsing failures — run 6 from an unquoted `title`, runs 7-8 from unquoted `gist` containing colons. The `title` fix landed but `gist` remains unprotected. A deterministic post-processing script (validate + auto-quote YAML string fields) would close this permanently without relying on LLM compliance.
-- **Minimum batch size guard** — run 8 showed that 2-key Skill batches can misfire (skill misinterprets task). Either enforce a minimum of 3 keys per batch, or fall back to individual dispatch for remainder batches. The batching formula `ceil(N/5)` already produces batches of 4-5 for N=22, but the remainder batch (N mod batch_size) can be arbitrarily small.
+- ~~**Prepare script (`pr_context_prepare.py`)**~~ — **done** (run 9). Deterministic script that handles batch grouping, prompt template filling, and noise summary writing. The orchestrator reads the script's JSON output and dispatches pre-built prompt files — zero template logic, zero batching decisions in the orchestrator.
+- **YAML frontmatter quoting enforcement** — four consecutive runs (6, 7, 8, 9) have surfaced parsing failures from unquoted string fields containing colons. Run 6: unquoted `title`. Runs 7-8: unquoted `gist`. Run 9: unquoted `title` again (2 files). The prompt template instructs quoting but subagents remain inconsistent. A deterministic post-processing script (validate + auto-quote YAML string fields) would close this permanently without relying on LLM compliance — this is now the highest-priority open item.
+- ~~**Minimum batch size guard**~~ — run 8 showed that 2-key Skill batches can misfire, but run 9 succeeded with a 2-PR Agent batch, suggesting the failure was Skill-specific. No longer a priority for Agent-based dispatch.
 - **Cypress/E2E test glob expansion** — the current `TEST_GLOBS` miss Cypress-style paths (`packages/cypress/cypress/*.ts`), causing test-only PRs like #7126 to pass through to LLM evaluation without a hint
 - **Verdict confidence scoring** — the comparative evaluation produces reasoning; a second pass could score confidence (high/medium/low) based on how close the peripheral vs relevant arguments are
 - **Cross-PR deduplication** — PRs that implement the same feature incrementally (e.g., #6747 adds mock endpoints, #6990 replaces them with real ones) could be grouped to avoid redundant documentation impact bullets

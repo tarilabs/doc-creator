@@ -7,7 +7,7 @@ description: >
   a pull_requests list.
 disable-model-invocation: true
 compatibility: Requires Python 3.11+ with pyyaml, and gh CLI authenticated. Designed for Claude Code.
-allowed-tools: Bash(python3 *) Read Skill Write
+allowed-tools: Bash(python3 *) Read Agent Write
 ---
 
 ## Step 1 — Fetch PR patches
@@ -45,6 +45,7 @@ python3 scripts/pr_context_preclassify.py
 
 This adds `hint`, `hint_reason`, and `hint_text` fields to each
 manifest entry based on title patterns and file-level analysis.
+`hint_text` is the fully expanded text the subagent consumes directly.
 Exit 0 = success.
 
 ## Artifact layout
@@ -67,37 +68,41 @@ artifacts/
 `{file}` matches the `file` field in each manifest entry
 (e.g. `kubeflow__model-registry__2367`).
 
-## Step 4 — Prepare reviewer batches
+## Step 4 — Prepare batch prompts
 
-Read the manifest at `artifacts/prcontext.md` (or the custom
-output directory).
+Run the prepare script to group PRs into batches and build prompt
+files:
 
-From the YAML frontmatter, collect the `file` key for every entry
-where `status: fetched`.
-
-Check which filtered patches are empty (0 bytes). For those, directly
-write a summary with `verdict: noise` and a one-line explanation
-("all changes were filtered as noise"). Remove them from the list.
-
-Group the remaining keys into batches of `ceil(N/5)` keys each
-(maximum 5 batches). If N <= 5, use one key per batch.
-
-**DO NOT** read `meta.yaml` files, filtered patches, PR bodies, or
-hint fields. The reviewer reads those itself from the manifest.
-
-## Step 5 — Dispatch PR reviewers
-
-For each batch from Step 4, invoke the `pr-reviewer` skill:
-
-```
-/pr-reviewer key1 key2 key3 key4 key5
+```bash
+python3 scripts/pr_context_prepare.py
 ```
 
-Invoke ALL batches in a SINGLE message.
+The script writes noise summaries for empty-patch entries, groups
+remaining PRs into ≤5 batches, fills the prompt template, and
+writes one prompt file per batch to `artifacts/prcontext/`.
+
+It prints a JSON summary to stdout:
+```json
+{"batches": ["artifacts/prcontext/batch_0.prompt.md", ...], "noise_written": 2}
+```
+
+Parse the JSON to get the list of batch prompt file paths.
+Exit 0 = success, exit 2 = fatal.
+
+## Step 5 — Summarize PR batches
+
+For each batch prompt file from Step 4, spawn an Agent subagent
+with **model: haiku**. The prompt is the file's content — read the
+file and use it as the Agent prompt directly. No template filling
+needed.
+
+**CRITICAL — launch ALL batch subagents in a SINGLE message.** Send
+one message containing one Agent tool call per batch. Do NOT wait for
+any subagent to complete before launching others.
 
 **DO NOT** reason about PR content, titles, or verdicts. Verdict
-judgment is the reviewer's job. Your job is mechanical: group keys
-and dispatch.
+judgment is the subagent's job. Your job is mechanical: read the
+batch prompt files and dispatch agents.
 
 ## Step 6 — Verdict sanity check
 
