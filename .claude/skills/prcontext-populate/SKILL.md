@@ -92,17 +92,21 @@ Exit 0 = success, exit 2 = fatal.
 ## Step 5 — Summarize PR batches
 
 For each batch prompt file from Step 4, spawn an Agent subagent
-with **model: haiku**. The prompt is the file's content — read the
-file and use it as the Agent prompt directly. No template filling
-needed.
+with **model: haiku**. **Do NOT read the prompt file yourself.** Instead,
+pass a short redirect prompt that tells the agent to read its own file:
+
+> Read {batch_prompt_path} and follow all instructions exactly.
+
+where `{batch_prompt_path}` is the absolute path to the batch prompt file.
+The agent reads the file — not you. This keeps your context lean.
 
 **CRITICAL — launch ALL batch subagents in a SINGLE message.** Send
 one message containing one Agent tool call per batch. Do NOT wait for
 any subagent to complete before launching others.
 
-**DO NOT** reason about PR content, titles, or verdicts. Verdict
-judgment is the subagent's job. Your job is mechanical: read the
-batch prompt files and dispatch agents.
+**DO NOT** read prompt file contents, reason about PR content, titles,
+or verdicts. Verdict judgment is the subagent's job. Your job is
+mechanical: construct redirect prompts and dispatch agents.
 
 ## Step 6 — Verdict sanity check
 

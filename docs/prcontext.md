@@ -117,13 +117,13 @@ The first run also suffered from the orchestrator compressing the ~5KB documenta
 
 ## Results: before and after
 
-| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) | Sixth run (v2, 22 PRs, batched) | Seventh run (22 PRs, Skill dispatch) | Eighth run (Skill batched dispatch) | Ninth run (prepare script + Agent batch) |
-|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|--------------------------------|--------------------------------------|--------------------------------------|------------------------------------------|
-| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) | 12 (55%) | 12 (55%) | 16 (73%) | 15 (68%) |
-| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) | 6 (27%) | 8 (36%) | 5 (23%) | 7 (32%) |
-| Noise | 0 | 0 | 0 | 0 | 1 (5%) | 4 (18%) | 2 (9%) | 1 (5%) | 0 |
-| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered | not triggered | not triggered | not triggered | not triggered |
-| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) | 2 (both justified) | 2 (both justified) | 5 (all justified) | 4 (all justified) |
+| Metric | First run (v1 prompt) | Second run (v2 prompt) | Third run (v2, different PRs) | Fourth run (v2, 22 PRs) | Fifth run (v2, 22 PRs, report script) | Sixth run (v2, 22 PRs, batched) | Seventh run (22 PRs, Skill dispatch) | Eighth run (Skill batched dispatch) | Ninth run (prepare script + Agent batch) | Tenth run (redirect prompts) |
+|--------|----------------------|------------------------|-------------------------------|-------------------------|---------------------------------------|--------------------------------|--------------------------------------|--------------------------------------|------------------------------------------|------------------------------|
+| Relevant | 22 (100%) | 16 (73%) | 19 (86%) | 15 (68%) | 16 (73%) | 12 (55%) | 12 (55%) | 16 (73%) | 15 (68%) | 13 (59%) |
+| Peripheral | 0 | 6 (27%) | 3 (14%) | 7 (32%) | 5 (23%) | 6 (27%) | 8 (36%) | 5 (23%) | 7 (32%) | 7 (32%) |
+| Noise | 0 | 0 | 0 | 0 | 1 (5%) | 4 (18%) | 2 (9%) | 1 (5%) | 0 | 2 (9%) |
+| Distribution skew flag | would have triggered | not triggered | triggered (advisory) | not triggered | not triggered | not triggered | not triggered | not triggered | not triggered | not triggered |
+| Hint overrides | n/a | 6 (all justified) | 6 (all justified) | 3 (all justified) | 4 (all justified) | 2 (both justified) | 2 (both justified) | 5 (all justified) | 4 (all justified) | 3 (all justified) |
 
 The second run's 6 peripheral PRs: Cypress tests (#7126), test verification (#1285), UX polish (#7131), route refactoring (#7072), review follow-up (#7082), and YAML simplification (#7063). All correctly identified as not changing what documentation would say.
 
@@ -168,27 +168,58 @@ Observations specific to the prepare-script + Agent dispatch model:
 - **YAML frontmatter quoting: fourth consecutive run.** Two files (#7131 and #1285) had unquoted `title` fields containing colons, breaking the verdict check script. Both required manual fixes. The prompt template instructs quoting but subagents remain inconsistent. This reinforces the case for a deterministic post-processing script to validate/auto-quote YAML string fields — relying on LLM compliance after four consecutive failures is not a viable strategy.
 - **Token usage varied by batch size and patch complexity.** Batch 2 (PRs #6907, #6910, #6977, #6982, #6990 — the core MCP deployment UI PRs with the largest patches) consumed 142K tokens. Batch 0 and batch 4 used ~46K tokens each. The 3x variance suggests token cost is driven by patch size more than PR count per batch.
 
-### Dispatch model comparison (runs 6 vs 7 vs 8 vs 9)
+The tenth run (22 PRs, same JIRA source) introduced **redirect prompts** — the orchestrator no longer reads batch prompt files into its own context. Instead of `Read batch_0.prompt.md` followed by an Agent call with the file's contents, the orchestrator sends a short redirect:
+
+> Read /absolute/path/to/batch_0.prompt.md and follow all instructions exactly.
+
+The agent reads its own prompt file. The orchestrator never sees prompt content, PR patches, metadata, or even the template structure. Its context for Step 5 is ~5 short strings. Results: 13 relevant (59%), 7 peripheral (32%), 2 noise (9%) — the healthiest relevant ratio yet and the first run to produce 2 noise verdicts without over-classifying. The 3 hint overrides (#2432, #2433, #2461) were all justified: `fix(`-prefixed PRs that implement new API surface (tool metadata, sourceLabel filtering, securityIndicators).
+
+The 7 peripheral PRs: sort fix (#2367), microcopy (#2420), sort-by-name fix (#2442), mock endpoints (#6747), URL truncation fix (#7021), review follow-up (#7082), test verification (#1285). The 2 noise PRs: route refactoring (#7072), Cypress tests (#7126). Notably, #6747 (mock BFF endpoints) was correctly classified as peripheral — the production implementation defers to #6990.
+
+Observations specific to the redirect-prompt model:
+- **Orchestrator context stays minimal.** In run 9, the orchestrator read each batch prompt file (~5-15KB each) to construct the Agent prompt, loading ~50KB of template+metadata into its context window. In run 10, the orchestrator's Step 5 context is 5 redirect strings totaling ~500 bytes. This is the logical endpoint of the anti-pattern 1 trajectory: the orchestrator went from loading PR content (runs 1-5), to loading prompt files (run 9), to loading nothing (run 10).
+- **Agent dispatch was immediate.** With no file reads between Step 4 and Step 5, the orchestrator parsed the JSON output and dispatched all 5 agents in one message with near-zero delay. The lightweight context also meant faster model generation — 5 short Agent calls generate faster than 5 calls with embedded multi-KB prompts.
+- **Subagent execution bounded by batch complexity.** Batch durations: 57s (batch 0, 5 PRs), 72s (batch 1, 5 PRs with large patches), 63s (batch 2, 5 PRs), 69s (batch 3, 5 PRs), 34s (batch 4, 2 PRs). Token usage: 48K, 79K, 137K, 57K, 46K. Batch 2 consumed 137K tokens — the core MCP deployment PRs with the largest filtered patches. Wall-clock bounded by batch 1 at 72s.
+- **Total pipeline time: ~2 minutes.** Steps 1-4 (deterministic): ~17s. Step 5 (agent dispatch + execution): ~75s. Steps 6-7 (verdict check + report): ~15s (including YAML fix). This is the fastest run to date and approaches the theoretical minimum for 5 batched haiku subagents processing 22 PRs.
+- **YAML quoting bug: fifth consecutive run.** Two files: #6907 (unquoted `title: feat: Add MCP...`) and #7082 (unquoted `gist: Cleanup following PR 7063: removes...`). Both fixed with single-line edits. The pattern is now fully predictable — any string field containing a colon will occasionally be written unquoted regardless of prompt instructions. This confirms the need for a deterministic YAML sanitizer script.
+
+**Key architectural insight: redirect prompts complete the "orchestrator is a router" vision.** The progression across 10 runs:
+
+| Run | What the orchestrator loads for Step 5 |
+|-----|----------------------------------------|
+| 1-5 | PR content (patches, bodies, metadata) — 70KB+ |
+| 6-8 | Prompt templates + metadata — ~20KB |
+| 9 | Pre-built prompt files — ~50KB |
+| 10 | Redirect strings only — ~500 bytes |
+
+Each step removed a category of content from the orchestrator's context. Run 10 reaches the limit: the orchestrator knows nothing about what the agents will do. It knows file paths and that's it. This eliminates the last remaining vector for orchestrator reasoning about PR content — it literally can't reason about content it never sees.
+
+**Future direction: per-PR prompts without batching.** The redirect-prompt model makes the dispatch overhead the only remaining argument for batching. If `pr_context_prepare.py` wrote one prompt file per PR instead of batching into groups of 5, the orchestrator would send 22 redirect strings (~2KB total) instead of 5. The context cost is negligible. The remaining question is whether 22 parallel Agent spawns (~33s dispatch overhead + ~10-15s execution each) would be faster or slower than 5 batched agents (~7s dispatch + ~70s execution). With each agent processing only 1 PR, execution time drops to ~15s per agent, but the ~10 concurrency cap means agents queue in waves. Net wall-clock might be similar (~40-50s vs ~75s), but isolation would be perfect — zero cross-PR contamination risk, individual retry granularity, and simpler prompt templates. Worth testing as run 11.
+
+### Dispatch model comparison (runs 6 vs 7 vs 8 vs 9 vs 10)
 
 The four dispatch models each have distinct trade-offs:
 
-| Aspect | Run 6 (Agent batching) | Run 7 (Skill per-PR) | Run 8 (Skill batching) | Run 9 (prepare script + Agent) |
-|--------|----------------------|---------------------|----------------------|-------------------------------|
-| Tool used | Agent (5 calls × ~4 PRs) | Skill (22 calls × 1 PR) | Skill (5 calls × ~4 PRs) | Agent (5 calls × ~4 PRs) |
-| Prompt building | Orchestrator (inline) | Orchestrator (inline) | Orchestrator (inline) | Deterministic script |
-| Dispatch mechanism | `run_in_background: true` | Forked execution | Forked execution | Foreground (parallel) |
-| Concurrent execution | Yes (async notifications) | Yes (forked) | Yes (forked) | Yes (parallel Agent calls) |
-| Result collection | Async (notifications) | Sequential (blocked) | Sequential (blocked) | Parallel (all in one message) |
-| Inter-dispatch lag | ~1-2s per Agent call | Negligible | Negligible | ~1-2s per Agent call |
-| Cross-PR contamination | Possible within batch | None | Possible within batch | Possible within batch |
-| Total LLM evaluations | 5 (batched) | 22 (individual) | 5 (batched) | 5 (batched) |
-| Small-batch reliability | Unknown | N/A (always 1) | Failed at 2-key batch | Succeeded at 2-PR batch |
-| Verdict quality | 12R/6P/4N | 12R/8P/2N | 16R/5P/1N | 15R/7P/0N |
-| YAML quoting failures | 1 | 1 | 1 | 2 |
-| Retries needed | 0 | 0 | 2 (for 1 batch) | 0 |
-| Orchestrator reasoning | Moderate (batching logic) | Low (metadata only) | Moderate (batching logic) | Minimal (read JSON, dispatch) |
+| Aspect | Run 6 (Agent batching) | Run 7 (Skill per-PR) | Run 8 (Skill batching) | Run 9 (prepare script + Agent) | Run 10 (redirect prompts) |
+|--------|----------------------|---------------------|----------------------|-------------------------------|--------------------------|
+| Tool used | Agent (5 calls × ~4 PRs) | Skill (22 calls × 1 PR) | Skill (5 calls × ~4 PRs) | Agent (5 calls × ~4 PRs) | Agent (5 calls × ~4 PRs) |
+| Prompt building | Orchestrator (inline) | Orchestrator (inline) | Orchestrator (inline) | Deterministic script | Deterministic script |
+| Prompt delivery | Embedded in Agent call | Embedded in Skill call | Embedded in Skill call | Read file → embed in Agent call | Redirect: "Read {path}" |
+| Orchestrator context (Step 5) | ~20KB (templates + metadata) | ~20KB (templates + metadata) | ~20KB (templates + metadata) | ~50KB (prompt file contents) | ~500 bytes (redirect strings) |
+| Dispatch mechanism | `run_in_background: true` | Forked execution | Forked execution | Foreground (parallel) | Foreground (parallel) |
+| Concurrent execution | Yes (async notifications) | Yes (forked) | Yes (forked) | Yes (parallel Agent calls) | Yes (parallel Agent calls) |
+| Result collection | Async (notifications) | Sequential (blocked) | Sequential (blocked) | Parallel (all in one message) | Parallel (all in one message) |
+| Inter-dispatch lag | ~1-2s per Agent call | Negligible | Negligible | ~1-2s per Agent call | Near-zero (tiny generation) |
+| Cross-PR contamination | Possible within batch | None | Possible within batch | Possible within batch | Possible within batch |
+| Total LLM evaluations | 5 (batched) | 22 (individual) | 5 (batched) | 5 (batched) | 5 (batched) |
+| Small-batch reliability | Unknown | N/A (always 1) | Failed at 2-key batch | Succeeded at 2-PR batch | Succeeded at 2-PR batch |
+| Verdict quality | 12R/6P/4N | 12R/8P/2N | 16R/5P/1N | 15R/7P/0N | 13R/7P/2N |
+| YAML quoting failures | 1 | 1 | 1 | 2 | 2 |
+| Retries needed | 0 | 0 | 2 (for 1 batch) | 0 | 0 |
+| Orchestrator reasoning | Moderate (batching logic) | Low (metadata only) | Moderate (batching logic) | Minimal (read JSON, dispatch) | None (pure redirect) |
+| Total pipeline time | ~80s | ~5-6min | ~5-6min | ~2.5min | ~2min |
 
-Key takeaway: run 9's prepare-script model achieves the cleanest separation of concerns — the deterministic script owns all batching and prompt-building logic, leaving the orchestrator as a pure dispatcher. Agent spawn latency remains the main UX cost (~10s for 5 calls), but the 2-PR batch that failed in run 8 (Skill dispatch) succeeded here (Agent dispatch), suggesting Agent-based evaluation is more robust for small batches. The YAML quoting bug persists across all dispatch models and needs a deterministic fix.
+Key takeaway: run 10's redirect-prompt model completes the trajectory from "orchestrator as content processor" to "orchestrator as pure router." The orchestrator's Step 5 context dropped from ~50KB (run 9, reading prompt files) to ~500 bytes (run 10, redirect strings only). This produced the fastest pipeline time (~2 minutes) and eliminated the last vector for orchestrator reasoning about PR content. The dispatch overhead — previously the dominant bottleneck — shrank because generating 5 short redirect strings is near-instant compared to generating 5 multi-KB embedded prompts. The YAML quoting bug persists across all dispatch models and needs a deterministic fix.
 
 ### Dispatch model comparison (runs 6 vs 7, original analysis)
 
@@ -398,7 +429,9 @@ Potential directions discussed but not yet implemented:
 - ~~**Report script (`pr_context_report.py`)**~~ — **done** (run 5). Reads YAML frontmatter from summary files, generates the markdown verdict table, and appends flags from verdict check. The orchestrator calls the script and relays output — zero file reads, zero content parsing.
 - ~~**Subagent batching**~~ — **done** (run 6). Prompt template and skill rewritten to batch ~4-5 PRs per Agent call (see Option B above). Reduces dispatch from ~22 calls to ~5.
 - ~~**Prepare script (`pr_context_prepare.py`)**~~ — **done** (run 9). Deterministic script that handles batch grouping, prompt template filling, and noise summary writing. The orchestrator reads the script's JSON output and dispatches pre-built prompt files — zero template logic, zero batching decisions in the orchestrator.
-- **YAML frontmatter quoting enforcement** — four consecutive runs (6, 7, 8, 9) have surfaced parsing failures from unquoted string fields containing colons. Run 6: unquoted `title`. Runs 7-8: unquoted `gist`. Run 9: unquoted `title` again (2 files). The prompt template instructs quoting but subagents remain inconsistent. A deterministic post-processing script (validate + auto-quote YAML string fields) would close this permanently without relying on LLM compliance — this is now the highest-priority open item.
+- ~~**Redirect prompts**~~ — **done** (run 10). The orchestrator sends `Read {path} and follow all instructions exactly` instead of reading prompt files into its own context. Agents read their own prompt files. Orchestrator Step 5 context dropped from ~50KB to ~500 bytes, producing the fastest pipeline time (~2 minutes) and eliminating the last vector for orchestrator content reasoning.
+- **Per-PR prompts (unbatching)** — now that redirect prompts make orchestrator context cost negligible, the only remaining argument for batching is dispatch overhead. If `pr_context_prepare.py` wrote one prompt file per PR, the orchestrator would send 22 redirect strings (~2KB) instead of 5. Execution time per agent drops from ~70s (4-5 PRs sequentially) to ~15s (1 PR), but the ~10 concurrency cap means agents queue in waves. Net wall-clock might be similar (~40-50s vs ~75s), but isolation is perfect: zero cross-PR contamination, individual retry granularity, simpler templates. The redirect-prompt model makes this architecturally cheap to try.
+- **YAML frontmatter quoting enforcement** — five consecutive runs (6-10) have surfaced parsing failures from unquoted string fields containing colons. The prompt template instructs quoting but subagents remain inconsistent. A deterministic post-processing script (validate + auto-quote YAML string fields) would close this permanently without relying on LLM compliance — this is now the highest-priority open item.
 - ~~**Minimum batch size guard**~~ — run 8 showed that 2-key Skill batches can misfire, but run 9 succeeded with a 2-PR Agent batch, suggesting the failure was Skill-specific. No longer a priority for Agent-based dispatch.
 - **Cypress/E2E test glob expansion** — the current `TEST_GLOBS` miss Cypress-style paths (`packages/cypress/cypress/*.ts`), causing test-only PRs like #7126 to pass through to LLM evaluation without a hint
 - **Verdict confidence scoring** — the comparative evaluation produces reasoning; a second pass could score confidence (high/medium/low) based on how close the peripheral vs relevant arguments are
