@@ -87,34 +87,52 @@ of entries to summarize.
 **DO NOT** read `meta.yaml` files, filtered patches, or PR bodies.
 The subagents read those files themselves.
 
-## Step 5 — Summarize each PR
+### Batching
 
-For each fetched PR, spawn an Agent subagent with **model: haiku**.
+Group the remaining entries into batches of up to
+`max(1, ceil(N / 5))` entries each, where N is the total number of
+entries to summarize. This targets at most 5 batches. Assign entries
+in manifest order.
 
-Read the prompt template from [prompt-template.md](prompt-template.md)
-and fill in these placeholders:
+For each entry, pre-compute its hint block text:
+- If `hint` is `no-hint` or absent: `"(none)"`
+- If `hint` is `candidate-peripheral`: `"DETERMINISTIC HINT: This PR's metadata suggests it is peripheral (reason: {hint_reason}). Evaluate this critically — override if the PR genuinely changes documented behavior."`
+- If `hint` is `candidate-noise`: `"DETERMINISTIC HINT: This PR's metadata suggests it is noise (reason: {hint_reason}). Evaluate this critically."`
+
+For each batch, build a `{pr_entries}` text block by repeating this
+structure for each entry in the batch (derive `repo` and `pr_number`
+from the URL):
+
+```
+### PR {i} of {batch_size}
+- pr_title: "{title}"
+- pr_url: {url}
+- repo: {repo}
+- pr_number: {pr_number}
+- meta_yaml_path: {output_dir}/raw/{file}.meta.yaml
+- filtered_patch_path: {output_dir}/filtered/{file}.patch
+- output_file: {output_dir}/{file}.md
+- hint_block: {hint_block_text}
+```
+
+## Step 5 — Summarize PR batches
+
+Read the prompt template from [prompt-template.md](prompt-template.md).
+
+For each batch from Step 4, spawn an Agent subagent with
+**model: haiku**. Fill in two placeholders:
 
 - `{documentation_target_file}` — the absolute path to jiracontext.md
-- `{meta_yaml_path}` — `{output_dir}/raw/{file}.meta.yaml`
-- `{filtered_patch_path}` — `{output_dir}/filtered/{file}.patch`
-- `{pr_title}` — from the manifest entry's `title` field
-- `{pr_url}` — the PR URL
-- `{repo}` — owner/repo derived from URL
-- `{pr_number}` — PR number
-- `{output_file}` — `{output_dir}/{file}.md`
-- `{hint_block}` — constructed from the entry's `hint` and `hint_reason`:
-  - If `hint` is `no-hint` or absent: empty string
-  - If `hint` is `candidate-peripheral`: `"\nDETERMINISTIC HINT: This PR's metadata suggests it is peripheral (reason: {hint_reason}). Evaluate this critically — override if the PR genuinely changes documented behavior.\n"`
-  - If `hint` is `candidate-noise`: `"\nDETERMINISTIC HINT: This PR's metadata suggests it is noise (reason: {hint_reason}). Evaluate this critically.\n"`
+- `{pr_entries}` — the batch's pre-built text block from Step 4
 
-**CRITICAL — launch ALL subagents in a SINGLE message.** Every PR
-is independent. Send one message containing N Agent tool calls, one
-per PR. Do NOT wait for any subagent to complete before launching
-others. Do NOT launch them in sequential batches.
+**CRITICAL — launch ALL batch subagents in a SINGLE message.** Send
+one message containing one Agent tool call per batch. Do NOT wait for
+any subagent to complete before launching others.
 
 **DO NOT** reason about PR content, titles, or verdicts. Verdict
-judgment is the subagent's job. Your job is mechanical: read the
-manifest fields, fill in the template, launch all subagents at once.
+judgment is the subagent's job. Your job is mechanical: build the
+`{pr_entries}` blocks, fill the template, launch all batch subagents
+at once.
 
 ## Step 6 — Verdict sanity check
 

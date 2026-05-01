@@ -228,14 +228,88 @@ Launching N subagents in a single message satisfies the "launch ALL in a SINGLE 
 
 The spawn phase is the slowest part of the pipeline. The deterministic scripts (Steps 1-3, 6-7) complete in seconds. The subagent execution (Step 5) completes in ~15-20s wall-clock because all run in parallel. But the dispatch overhead to launch them dominates.
 
-**Potential mitigation:** Batch multiple PRs per subagent (e.g., 5 PRs per call → 4-5 Agent calls instead of 22). Trade-off: batching risks context contamination between PRs and makes individual retry impossible. The current approach is correct-by-construction but slow-by-dispatch.
+There are two independent bottlenecks stacking:
+
+1. **Generation time.** A single message with 22 Agent tool calls is ~22KB of JSON the model must generate. The entire response is generated before *any* tool call dispatches. With streaming, early tool calls may start sooner, but the model still generates all 22 prompts sequentially within one inference pass.
+
+2. **Dispatch overhead.** Each Agent tool call requires API setup, process spawning, and context initialization — roughly 1-2s per call. This serializes even within a single message.
+
+Additionally, [community reports](https://claudefa.st/blog/guide/agents/sub-agent-best-practices) suggest a **concurrency cap of ~10 simultaneous subagents** in Claude Code. Beyond 10, subagents queue and execute in batches — the runtime waits for an entire batch to finish before starting the next. If true, 22 agents would run in 3 waves (10 + 10 + 2), not 22-way parallel. This would explain why subagent *execution* still takes ~15-20s despite all being "launched at once."
+
+#### Option A: Multi-message dispatch (relaxing the SINGLE message constraint)
+
+The "SINGLE message" constraint (anti-pattern 2) was designed to prevent the orchestrator from *waiting for completions* and *reasoning about content* between launches. But with `run_in_background: true`, the orchestrator gets an instant async response — it never waits, and never sees subagent content.
+
+So the real invariant isn't "single message" — it's:
+
+> **Don't load PR content into orchestrator context. Don't reason about PR content. Don't wait for completions before launching more agents.**
+
+Relaxing to multi-message dispatch would look like:
+
+- Message 1: launch 8 agents with `run_in_background: true` → returns immediately
+- Message 2: launch 8 more → returns immediately
+- Message 3: launch 6 more → returns immediately
+- Wait for all completion notifications
+
+**Potential benefit:** The first batch of agents starts executing while the model generates Message 2. With single-message, no agent starts until all 22 tool call blocks are fully generated. Multi-message pipelines generation with execution.
+
+**Likely non-benefit:** The per-tool-call dispatch overhead (~1-2s) is the same regardless of how calls are grouped. And each additional message requires its own inference pass (reading accumulated context, generating the batch), which adds overhead. For 22 agents, the dispatch overhead dominates — splitting across 3 messages might save ~5-10s of generation pipelining but adds ~3-5s of inter-message overhead.
+
+**Verdict:** Marginal improvement at best. Addresses the generation bottleneck but not the dispatch bottleneck. Worth testing empirically, but not a fundamental fix.
+
+#### Option B: Subagent batching (fewer, larger subagents)
+
+Instead of 22 subagents × 1 PR each, use **~5 subagents × 4-5 PRs each**. Each subagent processes its batch sequentially, writing a separate output file per PR.
+
+**Benefits:**
+- Dispatch overhead drops from ~33s (22 × 1.5s) to ~7s (5 × 1.5s) — an 80% reduction
+- Generation time drops proportionally (5 tool calls to generate instead of 22)
+- Well under the ~10 concurrency cap, so all 5 run truly in parallel
+- `jiracontext.md` (the documentation target) is read once per subagent instead of 22 times
+- Orchestrator stays mechanical — groups PRs into batches, fills a batch template, dispatches
+
+**Costs:**
+- Context contamination: one PR's content could influence the next verdict within the same subagent. Mitigated by processing each PR with explicit "reset" instructions and separate output files.
+- Individual retry: if a subagent fails, 4-5 PRs must be re-evaluated instead of 1. Mitigated by the fact that haiku subagents rarely fail on well-scoped tasks.
+- Template complexity: the batch template needs a loop structure ("for each PR in this batch, do steps 1-3 and write a separate file").
+
+**Estimated wall-clock time:** ~7s dispatch + ~25-30s execution (each subagent processes 4-5 PRs sequentially at ~5-6s each) = ~35s total. Versus current: ~33s dispatch + ~20s execution = ~53s. Net improvement: ~18s (~34%), and the UX is dramatically better — 5 fast dispatches instead of 22 slow ones.
+
+**Verdict:** Best available option. Reduces the dominant bottleneck (dispatch count) by 80% with manageable trade-offs.
+
+#### Option C: External orchestration via script
+
+Replace Agent tool calls entirely with a Python script that launches N `claude` CLI processes in parallel using `subprocess` / `asyncio`. Each process runs a single-shot prompt that reads its input files and writes its output file. OS-level process parallelism, no Agent tool dispatch.
+
+**Benefits:**
+- Bypasses the Agent tool dispatch layer entirely
+- True OS-level parallelism with no artificial concurrency cap
+- Testable, auditable, aligns with "scripts are buttons"
+
+**Costs:**
+- Requires `claude` CLI configured with API keys in the script's environment
+- Each CLI process pays its own API cold-start cost
+- No integration with Claude Code's task panel, completion notifications, or permission system
+- Moves subagent orchestration outside of Claude Code — harder to debug, inspect, or evolve
+
+**Verdict:** Architecturally clean but operationally complex. Worth considering if the pipeline grows beyond ~50 PRs, but over-engineering for the current scale.
+
+#### Implementation: Option B (subagent batching)
+
+**Implemented.** The prompt template and skill Steps 4-5 were rewritten:
+
+- `prompt-template.md` now accepts a `{pr_entries}` placeholder containing a structured list of PRs instead of single-PR placeholders. The subagent reads `jiracontext.md` once, then loops through each PR in its batch, writing a separate output file per PR.
+- Step 4 groups entries into batches of `max(1, ceil(N/5))` PRs each, pre-computes hint blocks, and builds the `{pr_entries}` text block for each batch.
+- Step 5 launches one subagent per batch (~5 Agent calls instead of ~22) in a single message.
+- Anti-contamination: explicit independence instruction ("do not let one PR's verdict influence another"), fresh file reads per PR, separate output files, and a DON'T ("don't reference or compare with other PRs in this batch").
+- Downstream scripts unchanged — per-PR `.md` output files keep the same frontmatter and structure.
 
 ## What's next
 
 Potential directions discussed but not yet implemented:
 
 - ~~**Report script (`pr_context_report.py`)**~~ — **done** (run 5). Reads YAML frontmatter from summary files, generates the markdown verdict table, and appends flags from verdict check. The orchestrator calls the script and relays output — zero file reads, zero content parsing.
+- ~~**Subagent batching**~~ — **done**. Prompt template and skill rewritten to batch ~4-5 PRs per Agent call (see Option B above). Reduces dispatch from ~22 calls to ~5.
 - **Cypress/E2E test glob expansion** — the current `TEST_GLOBS` miss Cypress-style paths (`packages/cypress/cypress/*.ts`), causing test-only PRs like #7126 to pass through to LLM evaluation without a hint
 - **Verdict confidence scoring** — the comparative evaluation produces reasoning; a second pass could score confidence (high/medium/low) based on how close the peripheral vs relevant arguments are
 - **Cross-PR deduplication** — PRs that implement the same feature incrementally (e.g., #6747 adds mock endpoints, #6990 replaces them with real ones) could be grouped to avoid redundant documentation impact bullets
-- **Subagent batching** — group multiple PRs per Agent call to reduce spawn latency (see Known Limitations above)

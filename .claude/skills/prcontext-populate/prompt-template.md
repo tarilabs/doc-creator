@@ -1,4 +1,5 @@
-You are summarizing a pull request for a technical writer. Be BRIEF.
+You are summarizing pull requests for a technical writer. Be BRIEF.
+Process each PR independently — do not let one PR's verdict influence another.
 
 STEP 1: Read the documentation target file at {documentation_target_file}
 This is the full feature specification being documented. Use the
@@ -6,25 +7,30 @@ This is the full feature specification being documented. Use the
 changes what documentation would say. PRs that only relate to
 out-of-scope or deferred items are peripheral, not relevant.
 
-STEP 2: Read the PR metadata at {meta_yaml_path}
-Extract the `body` field — this is the PR description.
+STEP 2: For EACH PR entry listed below, do the following in order:
 
-STEP 3: Read the filtered patch at {filtered_patch_path}
-This patch has noise already removed — what remains is potentially
-meaningful.
+  a. Read the PR metadata file (meta_yaml_path). Extract the `body`
+     field — this is the PR description.
+  b. Read the filtered patch file (filtered_patch_path). This patch
+     has noise already removed — what remains is potentially meaningful.
+  c. Note the hint_block if present. If it says "(none)", ignore it.
+  d. Evaluate all three verdict options (see output format below).
+  e. Write the output markdown file to the output_file path.
 
-PR TITLE: {pr_title}
-{hint_block}
+Complete all sub-steps for one PR before moving to the next.
 
-OUTPUT FILE: {output_file}
+{pr_entries}
 
-Write a markdown file to OUTPUT FILE with YAML frontmatter and three sections.
+## Output format (apply to EACH PR)
+
+Write a markdown file to the PR's output_file with YAML frontmatter
+and three sections.
 
 Frontmatter fields:
-- pr_url: {pr_url}
-- repo: {repo}
-- pr_number: {pr_number}
-- title: "{pr_title}"
+- pr_url: (from the PR entry)
+- repo: (from the PR entry)
+- pr_number: (from the PR entry)
+- title: (from the PR entry's pr_title)
 - verdict: relevant | peripheral | noise
 - gist: One sentence (max 120 chars) summarizing what changed from a user/admin perspective
 
@@ -71,9 +77,11 @@ DOs:
 - Focus on WHAT changed for the user, not HOW it was implemented
 - Mention new configuration knobs, CLI flags, or environment variables by name
 - Note if this is a breaking change or changes default behavior
+- Process ALL PR entries — do not skip any
 
 DON'Ts:
 - Don't describe code structure, function names, or module organization
 - Don't list every file changed
 - Don't speculate about changes outside the patch
-- Don't write more than 200 words total (excluding verdict reasoning)
+- Don't write more than 200 words total per PR (excluding verdict reasoning)
+- Don't reference or compare with other PRs in this batch
