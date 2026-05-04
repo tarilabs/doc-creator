@@ -3,7 +3,7 @@
 
 Usage:
     python3 scripts/jira_exploration.py RHOAIENG-53404 RHOAIENG-60547
-    python3 scripts/jira_exploration.py RHAISTRAT-1084 --link-filter RHOAI
+    python3 scripts/jira_exploration.py RHAISTRAT-1084 --link-filter UX
     python3 scripts/jira_exploration.py RHOAIENG-53404 --output-dir /tmp/jiras
 """
 

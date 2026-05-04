@@ -2,6 +2,15 @@
 
 TODO: will need revision
 
+## Pipeline steps
+
+```
+./scripts/jira_exploration.py RHAISTRAT-1084
+/jiracontext-populate
+/prcontext-populate
+./scripts/clone_code_repos.py
+```
+
 ## Prerequisites
 
 - Python 3.11+
