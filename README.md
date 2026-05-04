@@ -9,6 +9,7 @@ TODO: will need revision
 /jiracontext-populate
 /prcontext-populate
 ./scripts/clone_code_repos.py
+./scripts/doc_context_bootstrap.py 
 ```
 
 ## Prerequisites
