@@ -179,10 +179,22 @@ def _group_by_repo(prs):
     return groups
 
 
+UX_KEY_PREFIXES = ("RHOAIUX",)
+
+
+def _is_ux_issue(key):
+    """Check if a JIRA key belongs to a UX project."""
+    return any(key.startswith(prefix) for prefix in UX_KEY_PREFIXES)
+
+
 def _build_output(feature_body, jira_issues, relevant_prs, peripheral_prs,
                   code_repos, additional_links, starting_issue):
     """Build the planner-input.md content."""
     lines = []
+
+    other_issues = [i for i in jira_issues if i["key"] != starting_issue]
+    ux_issues = [i for i in other_issues if _is_ux_issue(i["key"])]
+    req_issues = [i for i in other_issues if not _is_ux_issue(i["key"])]
 
     # YAML frontmatter
     fm = {
@@ -200,16 +212,33 @@ def _build_output(feature_body, jira_issues, relevant_prs, peripheral_prs,
     lines.append("---")
     lines.append("")
 
-    # Feature overview
+    # Feature overview (= starting issue body, the authoritative scope document)
     lines.append("## Feature Overview")
+    lines.append("")
+    lines.append(f"Source: **{starting_issue}** (starting issue)")
     lines.append("")
     lines.append(feature_body)
     lines.append("")
 
-    # JIRA requirements
+    # UX context (only if UX JIRAs exist)
+    if ux_issues:
+        lines.append("## UX Context")
+        lines.append("")
+        lines.append("These UX issues contain personas, job stories, user flows,")
+        lines.append("and interaction details. Prioritize this content when")
+        lines.append("identifying personas, writing job statements, and mapping")
+        lines.append("the user journey.")
+        lines.append("")
+        for issue in ux_issues:
+            lines.append(f"### {issue['key']}: {issue['summary']} ({issue['issue_type']})")
+            lines.append("")
+            lines.append(issue["body"])
+            lines.append("")
+
+    # JIRA requirements (remaining issues, excluding starting issue and UX)
     lines.append("## JIRA Requirements")
     lines.append("")
-    for issue in jira_issues:
+    for issue in req_issues:
         lines.append(f"### {issue['key']}: {issue['summary']} ({issue['issue_type']})")
         lines.append("")
         lines.append(issue["body"])

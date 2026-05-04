@@ -52,8 +52,10 @@ def test_golden_path(tmp_path):
     result = _run_prepare(tmp_path)
     assert result.returncode == 0
     text = (tmp_path / "artifacts" / "docplan" / "planner-input.md").read_text()
-    assert "Widget requirements here." in text
     assert "Feature overview text." in text
+    assert "Source: **PROJ-1** (starting issue)" in text
+    # Starting issue body should NOT be duplicated under JIRA Requirements
+    assert "Widget requirements here." not in text
     summary = json.loads(result.stdout.strip())
     assert summary["jira_issues"] == 1
 
@@ -85,6 +87,55 @@ def test_relevant_pr_sections_included(tmp_path):
     text = (tmp_path / "artifacts" / "docplan" / "planner-input.md").read_text()
     assert "New endpoint added." in text
     assert "Needs API reference." in text
+
+
+def test_ux_issues_get_separate_section(tmp_path):
+    jc_dir = tmp_path / "artifacts" / "jiracontext"
+    jc_dir.mkdir(parents=True, exist_ok=True)
+    _write_manifest(
+        jc_dir / "PROJ-1.md",
+        {"jira_key": "PROJ-1", "summary": "Add widget", "issue_type": "Feature Request"},
+        body="Widget requirements.",
+    )
+    _write_manifest(
+        jc_dir / "RHOAIUX-100.md",
+        {"jira_key": "RHOAIUX-100", "summary": "UX for widget", "issue_type": "Epic"},
+        body="Job stories and user flows here.",
+    )
+    _write_manifest(
+        jc_dir / "ENG-200.md",
+        {"jira_key": "ENG-200", "summary": "Backend work", "issue_type": "Story"},
+        body="Engineering details.",
+    )
+    _write_manifest(
+        tmp_path / "artifacts" / "doccontext.md",
+        {"starting_issue": "PROJ-1",
+         "jira_issues": [
+             {"key": "PROJ-1", "path": str(jc_dir / "PROJ-1.md")},
+             {"key": "RHOAIUX-100", "path": str(jc_dir / "RHOAIUX-100.md")},
+             {"key": "ENG-200", "path": str(jc_dir / "ENG-200.md")},
+         ],
+         "pull_requests": [], "code_repositories": [], "additional_links": []},
+        body="Feature overview.",
+    )
+    result = _run_prepare(tmp_path)
+    assert result.returncode == 0
+    text = (tmp_path / "artifacts" / "docplan" / "planner-input.md").read_text()
+    # UX issue under its own section
+    assert "## UX Context" in text
+    assert "Job stories and user flows here." in text
+    # Engineering issue under JIRA Requirements
+    assert "Engineering details." in text
+    # UX section comes before JIRA Requirements
+    assert text.index("## UX Context") < text.index("## JIRA Requirements")
+
+
+def test_no_ux_issues_omits_section(tmp_path):
+    _setup_minimal(tmp_path)
+    result = _run_prepare(tmp_path)
+    assert result.returncode == 0
+    text = (tmp_path / "artifacts" / "docplan" / "planner-input.md").read_text()
+    assert "## UX Context" not in text
 
 
 def test_missing_doccontext_exits_2(tmp_path):

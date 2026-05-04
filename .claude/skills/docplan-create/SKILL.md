@@ -82,5 +82,3 @@ Report to the user:
 - Module count and persona count from the verification output
 - Any errors or warnings from the verification
 - Evidence counts from Step 1 (JIRA issues, relevant PRs, etc.)
-
-Suggest the user review the plan before proceeding to writing.

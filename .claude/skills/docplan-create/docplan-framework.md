@@ -18,8 +18,8 @@ organization, not discovery.
 
 ### 1. Understand the Feature Scope
 
-Read the Feature Overview and JIRA Requirements sections of the planner
-input. Identify:
+Read the Feature Overview first — it is the starting issue body and the
+authoritative scope document. Then read the remaining sections. Identify:
 
 - **What the feature does** — problem statement, goals, acceptance criteria
 - **What's IN scope** for v1 — the features to document
@@ -32,6 +32,11 @@ was delivered). The PRs tell you what was actually built. When scope and
 implementation diverge, trust the PRs.
 
 ### 2. Identify Personas
+
+If the planner input contains a **UX Context** section, start there —
+UX issues are the richest source for personas, job stories, and user
+flows. They often contain ready-made persona definitions and interaction
+details that should be preferred over synthesized ones.
 
 Extract personas from the JIRA context. For enterprise platform features,
 personas are typically:
@@ -105,8 +110,9 @@ For each planned module, write a job statement:
 - The **outcome** comes from the acceptance criteria
 
 If the JIRA already contains job stories, reuse and refine them rather
-than inventing new ones. The JIRA's phrasing is often closer to real
-user language.
+than inventing new ones. UX issues are the most likely source for
+ready-made job stories — check the UX Context section first when it
+exists. The JIRA's phrasing is often closer to real user language.
 
 ### 6. Classify Module Types
 
