@@ -30,6 +30,9 @@ log = logging.getLogger("clone_code_repos")
 DEFAULT_MANIFEST = "artifacts/jiracontext.md"
 DEFAULT_OUTPUT_DIR = "artifacts/codecontext"
 
+DEFAULT_EXCLUDE_DOMAINS = ["redhat.com"]
+DEFAULT_EXCLUDE_REPOS = ["opendatahub-io/opendatahub-tests"]
+
 
 def _parse_manifest(path):
     with open(path, encoding="utf-8") as f:
@@ -51,6 +54,18 @@ def _repo_dirname(url):
     if len(parts) >= 2:
         return f"{parts[-2]}--{parts[-1]}"
     return parts[-1] if parts else "unknown"
+
+
+def _is_excluded(url, exclude_domains, exclude_repos):
+    """Check whether a repo URL matches any exclusion rule."""
+    parsed = urlparse(url.rstrip("/"))
+    if any(parsed.hostname and parsed.hostname.endswith(d)
+           for d in exclude_domains):
+        return True
+    path = parsed.path.strip("/")
+    if any(path == r or path.startswith(r + "/") for r in exclude_repos):
+        return True
+    return False
 
 
 def _clone(url, dest):
@@ -78,7 +93,26 @@ def main():
         "--output-dir", default=DEFAULT_OUTPUT_DIR,
         help=f"Directory for cloned repos (default: {DEFAULT_OUTPUT_DIR})",
     )
+    parser.add_argument(
+        "--no-default-excludes", action="store_true",
+        help="Disable default domain and repo exclusions",
+    )
+    parser.add_argument(
+        "--exclude-domain", action="append", default=[],
+        help="Additional domain suffixes to exclude (repeatable)",
+    )
+    parser.add_argument(
+        "--exclude-repo", action="append", default=[],
+        help="Additional org/repo paths to exclude (repeatable)",
+    )
     args = parser.parse_args()
+
+    if args.no_default_excludes:
+        exclude_domains = list(args.exclude_domain)
+        exclude_repos = list(args.exclude_repo)
+    else:
+        exclude_domains = DEFAULT_EXCLUDE_DOMAINS + args.exclude_domain
+        exclude_repos = DEFAULT_EXCLUDE_REPOS + args.exclude_repo
 
     logging.basicConfig(
         level=logging.INFO,
@@ -99,20 +133,27 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     failures = 0
+    cloned = 0
     for url in repos:
+        if _is_excluded(url, exclude_domains, exclude_repos):
+            log.info("Excluded by filter: %s", url)
+            continue
         dirname = _repo_dirname(url)
         dest = os.path.join(args.output_dir, dirname)
         if os.path.isdir(dest):
             log.info("Already exists, skipping: %s", dest)
+            cloned += 1
             continue
-        if not _clone(url, dest):
+        if _clone(url, dest):
+            cloned += 1
+        else:
             failures += 1
 
     if failures:
         log.error("%d repo(s) failed to clone", failures)
         sys.exit(1)
 
-    log.info("Done. %d repo(s) in %s", len(repos), args.output_dir)
+    log.info("Done. %d repo(s) in %s", cloned, args.output_dir)
 
 
 if __name__ == "__main__":
