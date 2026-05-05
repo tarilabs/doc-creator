@@ -10,7 +10,17 @@ TODO: will need revision
 /prcontext-populate
 ./scripts/clone_code_repos.py
 ./scripts/doc_context_bootstrap.py 
+/docplan-create
+/docwrite --target-repo /Users/mmortari/git/openshift-ai-documentation
 ```
+
+## Luxuries we cannot afford
+
+- process today "make me a demo"
+- process today "based on a draft of the docs"
+- hardcode based on (current) Red Hat openshift-ai-documentation repo
+  - ...even because, what if conventions will change in the future?
+
 
 ## Prerequisites
 
