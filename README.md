@@ -12,6 +12,7 @@ TODO: will need revision
 ./scripts/doc_context_bootstrap.py 
 /docplan-create
 /docwrite --target-repo /Users/mmortari/git/openshift-ai-documentation
+/docreview
 ```
 
 ## Luxuries we cannot afford
