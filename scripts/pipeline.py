@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import graphlib
 import json
+import os
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -497,6 +498,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="STEP",
         help="Skip all steps before STEP",
     )
+    parser.add_argument(
+        "--model",
+        help="Claude model to use (default: CLAUDE_MODEL env or claude-opus-4-6)",
+    )
     return parser.parse_args(argv)
 
 
@@ -509,8 +514,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         write_args = "--draft"
 
+    model = args.model or os.environ.get("CLAUDE_MODEL", "claude-opus-4-6")
+
     claude_flags = (
-        "--dangerously-skip-permissions --no-session-persistence"
+        f"--model {model}"
+        " --dangerously-skip-permissions --no-session-persistence"
         " --output-format stream-json --verbose"
         " --include-partial-messages"
     )
