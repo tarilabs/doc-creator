@@ -2,6 +2,12 @@
 
 TODO: will need revision
 
+## Usage
+
+```sh
+uv run python scripts/pipeline.py --jira-key RHAISTRAT-1084 --target-repo /Users/mmortari/git/openshift-ai-documentation
+```
+
 ## Pipeline steps
 
 ```
