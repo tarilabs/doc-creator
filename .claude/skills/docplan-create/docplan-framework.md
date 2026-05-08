@@ -149,8 +149,44 @@ After drafting all modules, verify:
   use following only the planned modules?)
 - Both personas have their needs covered
 - No deferred features appear in the planned modules
+- For discovery/catalog/marketplace features: the documentation notes
+  that pre-loaded content ships out of the box (e.g., "the Catalog
+  includes pre-loaded MCP servers"). Do NOT plan an inventory of
+  specific items — just ensure users know defaults exist.
 
-### 8. Handle Evidence Gaps
+### 8. Trace Prerequisite Dependencies
+
+For each **procedure** module, trace the prerequisite chain backward:
+
+- What must be **installed** before the user can start? (operators,
+  CRDs, CLI tools)
+- What must be **configured** before the procedure works? (ConfigMaps,
+  registrations, feature flags)
+- What **gating conditions** appear in the code? (buttons disabled
+  without a CRD, features hidden behind a flag)
+
+Cross-reference these prerequisites with the planned modules. If a
+prerequisite is covered by an existing module, it's fine. If it is NOT
+covered and has no PR evidence in the evidence set, create an entry in
+the **Prerequisite Gaps** section of the plan.
+
+A prerequisite gap is NOT the same as an unverified topic. Unverified
+topics are aspirational features with no code. Prerequisite gaps are
+**real dependencies that the code assumes exist** — they just weren't
+in the PR evidence set because they were implemented elsewhere or are
+external to the feature.
+
+Each prerequisite gap entry must include:
+- **Name**: what the prerequisite is
+- **Blocking modules**: which planned modules depend on it
+- **Evidence**: what JIRA text, code gating condition, or PR reference
+  indicates this prerequisite exists
+- **Severity**: `blocking` (user cannot complete the procedure without
+  it) or `informational` (user can work around it)
+- **Recommended action**: install procedure from engineering, consult
+  SME, check related repos
+
+### 9. Handle Evidence Gaps
 
 Features mentioned in JIRA but with **no supporting PRs** should be
 listed in "Unverified Topics" with:
@@ -222,3 +258,8 @@ Before saving the plan, verify ALL of these:
 9. Peripheral PR details are incorporated into relevant modules,
    not created as separate topics
 10. Dev Preview disclaimer is marked on all modules
+11. Every procedure module's prerequisites are satisfied — either by
+    another module or by a Prerequisite Gaps entry. No procedure should
+    leave users stuck at an undocumented dependency.
+12. For catalog/marketplace features: the documentation notes that
+    pre-loaded content exists, without listing specific items

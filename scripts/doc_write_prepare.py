@@ -149,6 +149,19 @@ def parse_docplan(docplan_path):
     return modules
 
 
+def parse_docplan_gaps(docplan_path):
+    """Extract Prerequisite Gaps and Open Questions from docplan body.
+
+    Returns a dict with 'prerequisite_gaps' (str) and 'open_questions' (str),
+    each containing the raw section text or empty string if not found.
+    """
+    _, body = _parse_manifest(docplan_path)
+    return {
+        "prerequisite_gaps": _extract_section(body, "Prerequisite Gaps") or "",
+        "open_questions": _extract_section(body, "Open Questions") or "",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Phase 2: Parse doccontext and build evidence indices
 # ---------------------------------------------------------------------------
@@ -462,8 +475,40 @@ def _build_xref_map(modules, ext):
     return xref_map
 
 
+def _filter_gaps_for_module(gaps_text, module_title):
+    """Extract gap entries that mention this module by title.
+
+    Scans the raw Prerequisite Gaps or Open Questions section text for
+    entries that reference the module title (case-insensitive substring
+    match). Returns matching text or empty string.
+    """
+    if not gaps_text.strip():
+        return ""
+
+    title_lower = module_title.lower()
+    relevant = []
+    current_entry = []
+
+    for line in gaps_text.split("\n"):
+        if line.startswith("- **") or re.match(r"^\d+\.\s+\*\*", line):
+            if current_entry:
+                block = "\n".join(current_entry)
+                if title_lower in block.lower():
+                    relevant.append(block)
+            current_entry = [line]
+        else:
+            current_entry.append(line)
+
+    if current_entry:
+        block = "\n".join(current_entry)
+        if title_lower in block.lower():
+            relevant.append(block)
+
+    return "\n\n".join(relevant)
+
+
 def write_module_prompt(module, jira_evidence, pr_evidence, confidence,
-                        xref_map, target_path, output_dir):
+                        xref_map, target_path, output_dir, docplan_gaps=None):
     """Write a per-module prompt file with spec + evidence."""
     slug = _title_to_slug(module["title"])
     prompt_path = Path(output_dir) / f"{slug}.prompt.md"
@@ -504,6 +549,36 @@ def write_module_prompt(module, jira_evidence, pr_evidence, confidence,
         lines.append("disclaimer admonition. Use the exact boilerplate from the")
         lines.append("format reference.")
         lines.append("")
+
+    # Known gaps from the documentation plan
+    if docplan_gaps:
+        prereq_gaps = _filter_gaps_for_module(
+            docplan_gaps.get("prerequisite_gaps", ""), module["title"]
+        )
+        open_questions = _filter_gaps_for_module(
+            docplan_gaps.get("open_questions", ""), module["title"]
+        )
+
+        has_any_gap = bool(prereq_gaps.strip()) or bool(open_questions.strip())
+        if has_any_gap:
+            lines.append("## Known Gaps From Documentation Plan")
+            lines.append("")
+            lines.append("The planner identified the following gaps relevant to this")
+            lines.append("module. Address them by adding prerequisite notes or caveats")
+            lines.append("with [NEEDS VERIFICATION] markers where evidence is missing.")
+            lines.append("")
+
+            if prereq_gaps.strip():
+                lines.append("### Prerequisite Gaps")
+                lines.append("")
+                lines.append(prereq_gaps)
+                lines.append("")
+
+            if open_questions.strip():
+                lines.append("### Open Questions")
+                lines.append("")
+                lines.append(open_questions)
+                lines.append("")
 
     lines.append("## Cross-Module References")
     lines.append("")
@@ -584,7 +659,12 @@ def main():
 
     # Phase 1: Parse docplan
     modules = parse_docplan(args.docplan)
+    docplan_gaps = parse_docplan_gaps(args.docplan)
     log.info("Parsed %d modules from docplan", len(modules))
+    if docplan_gaps["prerequisite_gaps"]:
+        log.info("Found prerequisite gaps section in docplan")
+    if docplan_gaps["open_questions"]:
+        log.info("Found open questions section in docplan")
 
     if not modules:
         log.error("No modules found in docplan")
@@ -639,6 +719,7 @@ def main():
         prompt_path = write_module_prompt(
             mod, jira_evidence, pr_evidence, confidence,
             xref_map, target_path, str(output_dir),
+            docplan_gaps=docplan_gaps,
         )
 
         module_configs.append({

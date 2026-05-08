@@ -26,6 +26,7 @@ to produce a structured documentation plan from pre-assembled evidence.
    - Write job statements for each module
    - Classify module types
    - Check coverage against acceptance criteria
+   - Trace prerequisite dependencies for every procedure module
    - Handle evidence gaps
 
 5. **Write the completed plan** to: `{output_path}`
@@ -63,6 +64,9 @@ DON'Ts:
 - Don't leave any [REPLACE:] markers in the output
 - Don't write more than 15 modules (merge aggressively if needed)
 - Don't describe implementation details — focus on what users see and do
+- Don't leave procedure modules with undocumented hard prerequisites —
+  if a code gating condition, operator dependency, or registration step
+  blocks the user and no module covers it, add a Prerequisite Gaps entry
 
 When you are done writing the plan file, respond with only: "Done."
 Do NOT summarize the plan content in your final response.

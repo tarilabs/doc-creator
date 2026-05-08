@@ -45,4 +45,22 @@ DON'Ts:
 - Don't deviate from the format reference's structural conventions
 - Don't ignore the quality checklist
 
+## Flow Completeness Check
+
+After writing a **procedure** module, trace the user's path from the
+first prerequisite to the final outcome:
+
+1. Can the user satisfy every listed prerequisite from existing
+   documentation? If a prerequisite depends on an undocumented install
+   or configuration step, add it as a prerequisite with
+   [NEEDS VERIFICATION] and explain what the user may need to do.
+2. At each step, ask: "Can the user actually do this right now, or is
+   there a missing manual step between this step and the next?"
+3. After the final step, does the documented outcome actually happen?
+   If a registration, restart, or additional action is needed, document
+   it or add a NOTE with [NEEDS VERIFICATION].
+
+If the module specification includes a "Known Gaps From Documentation
+Plan" section, use those gaps as starting points for this check.
+
 When done, respond with only: "Done."

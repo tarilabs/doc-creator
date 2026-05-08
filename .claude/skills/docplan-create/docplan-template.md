@@ -69,6 +69,19 @@ acceptance_criteria_coverage:
 
 [REPLACE: one row per acceptance criterion from the starting JIRA issue. Status is "covered" if at least one module addresses it; "uncovered" otherwise. If any criterion is uncovered, explain why in Open Questions.]
 
+## Prerequisite Gaps
+
+[REPLACE: List hard prerequisites that the code assumes exist but that are NOT covered by any planned module and have no PR evidence in this evidence set. These are real dependencies — not aspirational features — that users need before they can complete documented procedures.
+
+For each gap:
+- **Name**: what the prerequisite is
+- **Blocking modules**: which planned modules depend on it
+- **Evidence**: what JIRA text, code gating condition, or PR reference indicates this exists
+- **Severity**: blocking (user cannot proceed without it) or informational (workaround exists)
+- **Recommended action**: what to do next (consult SME, obtain install procedure, check other repos)
+
+If no prerequisite gaps exist, write "No prerequisite gaps identified."]
+
 ## Deferred Topics
 
 [REPLACE: List features explicitly marked as deferred or out-of-scope in the JIRA. For each item, include:

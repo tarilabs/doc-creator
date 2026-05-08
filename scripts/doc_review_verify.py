@@ -189,11 +189,43 @@ def cross_module_checks(modules_data):
     return issues
 
 
+def check_remaining_markers(modules_data):
+    """Check for [NEEDS VERIFICATION] markers remaining after review.
+
+    Returns list of findings with module slug, line number, and context.
+    """
+    marker_re = __import__("re").compile(r"\[NEEDS\s+VERIFICATION\]", __import__("re").IGNORECASE)
+    issues = []
+
+    for mod_data in modules_data:
+        target_path = mod_data.get("target_path", "")
+        if not target_path or not Path(target_path).exists():
+            continue
+
+        lines = Path(target_path).read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines, 1):
+            if marker_re.search(line):
+                context = line.strip()[:120]
+                issues.append({
+                    "module": mod_data.get("slug", "unknown"),
+                    "type": "unresolved_marker",
+                    "description": (
+                        f"[NEEDS VERIFICATION] marker remains at line {i}: "
+                        f"{context}"
+                    ),
+                    "severity": "minor",
+                    "line": i,
+                })
+
+    return issues
+
+
 # ---------------------------------------------------------------------------
 # Phase 6-7: Generate report and summary
 # ---------------------------------------------------------------------------
 
-def write_report(report_path, module_results, aggregation, cross_issues, diff_metrics):
+def write_report(report_path, module_results, aggregation, cross_issues,
+                 diff_metrics, marker_issues=None):
     """Write human-readable review report."""
     lines = ["# Documentation Review Report\n"]
 
@@ -204,6 +236,8 @@ def write_report(report_path, module_results, aggregation, cross_issues, diff_me
     lines.append(f"- **Fixed:** {agg['by_action'].get('fixed', 0)}")
     lines.append(f"- **Reported:** {agg['by_action'].get('reported', 0)}")
     lines.append(f"- **Skipped:** {agg['by_action'].get('skipped', 0)}")
+    if marker_issues:
+        lines.append(f"- **Unresolved [NEEDS VERIFICATION] markers:** {len(marker_issues)}")
     lines.append("")
 
     if agg["by_severity"]:
@@ -252,6 +286,15 @@ def write_report(report_path, module_results, aggregation, cross_issues, diff_me
     if cross_issues:
         lines.append("## Cross-Module Issues\n")
         for issue in cross_issues:
+            lines.append(f"- ({issue['severity']}) [{issue['module']}] {issue['description']}")
+        lines.append("")
+
+    # Unresolved verification markers
+    if marker_issues:
+        lines.append("## Unresolved [NEEDS VERIFICATION] Markers\n")
+        lines.append("These markers remain after both style and technical review passes.")
+        lines.append("Each requires SME review or additional source code investigation.\n")
+        for issue in marker_issues:
             lines.append(f"- ({issue['severity']}) [{issue['module']}] {issue['description']}")
         lines.append("")
 
@@ -360,10 +403,20 @@ def main():
     # Phase 4-5: Aggregate and cross-module checks
     aggregation = aggregate_findings(all_findings)
     cross_issues = cross_module_checks(modules)
+    marker_issues = check_remaining_markers(modules)
+
+    if marker_issues:
+        log.warning(
+            "%d [NEEDS VERIFICATION] marker(s) remain after review",
+            len(marker_issues),
+        )
 
     # Phase 6: Write report
     report_path = output_dir / "review-report.md"
-    write_report(report_path, module_results, aggregation, cross_issues, diff_metrics)
+    write_report(
+        report_path, module_results, aggregation,
+        cross_issues, diff_metrics, marker_issues,
+    )
     log.info("Wrote review report to %s", report_path)
 
     # Phase 7: Write summary JSON
@@ -375,6 +428,7 @@ def main():
         "verdicts": {m["slug"]: m["verdict"] for m in module_results},
         "diff_metrics": diff_metrics,
         "cross_module_issues": len(cross_issues),
+        "unresolved_markers": len(marker_issues),
         "validation_errors": validation_errors,
         "module_results": [
             {

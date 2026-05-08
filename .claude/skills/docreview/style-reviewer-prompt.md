@@ -94,6 +94,8 @@ If format reference permits something IBM-SG forbids, follow format reference.
 - Do NOT rewrite content beyond what the style fix requires.
 - Do NOT reorganize module structure or remove content.
 - Do NOT check technical accuracy — that is a separate reviewer's job.
+- Do NOT remove or edit `[NEEDS VERIFICATION]` markers — these are
+  intentional tags for the technical reviewer to resolve. Skip them.
 - Do NOT flag issues in AsciiDoc boilerplate attributes
   (`:_mod-docs-content-type:`, `[id="..."]`, `[role="_abstract"]`).
 
