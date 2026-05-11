@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Search JIRA for RHOAIENG/RHAISTRAT issues with a specific label.
+"""Search JIRA for RHOAIENG/RHAISTRAT issues with the ai1st-doc-start label
+and trigger a GitLab CI doc-pipeline for each one.
 
-Optionally trigger a GitLab CI pipeline for each issue found.
+Idempotent: after a successful trigger, the label is swapped from
+ai1st-doc-start → ai1st-doc-invoked so the issue won't be picked up again.
+If the trigger fails, the label stays unchanged for retry on the next run.
 
 Usage:
-    python3 scripts/jira_label_search.py
-    python3 scripts/jira_label_search.py --trigger
-    python3 scripts/jira_label_search.py --trigger --job doc-creator
+    python3 scripts/jira_ai1st_doc_start_trigger.py
+    python3 scripts/jira_ai1st_doc_start_trigger.py --trigger
+    python3 scripts/jira_ai1st_doc_start_trigger.py --trigger --job doc-creator
 """
 
 import argparse
@@ -14,12 +17,13 @@ import logging
 import subprocess
 import sys
 
-from jira_utils import require_env, search_issues
+from jira_utils import require_env, search_issues, add_labels, remove_labels
 
-log = logging.getLogger("jira_label_search")
+log = logging.getLogger("jira_ai1st_doc_start_trigger")
 
 DEFAULT_PROJECTS = ["RHOAIENG", "RHAISTRAT"]
-DEFAULT_LABEL = "ai1st-doc-start"
+LABEL_START = "ai1st-doc-start"
+LABEL_INVOKED = "ai1st-doc-invoked"
 GITLAB_REPO = "redhat/rhel-ai/agentic-ci/doc-pipeline"
 
 
@@ -46,15 +50,25 @@ def trigger_pipeline(jira_key, job):
     return False
 
 
+def swap_label(server, user, token, jira_key):
+    try:
+        add_labels(server, user, token, jira_key, [LABEL_INVOKED])
+        remove_labels(server, user, token, jira_key, [LABEL_START])
+        log.info("  -> label swapped: %s → %s", LABEL_START, LABEL_INVOKED)
+        return True
+    except Exception as e:
+        log.warning("  -> label swap failed for %s: %s (pipeline was triggered)",
+                    jira_key, e)
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Search JIRA for issues with a given label."
+        description="Find ai1st-doc-start issues and trigger doc-pipeline."
     )
     parser.add_argument("--projects", nargs="+", default=DEFAULT_PROJECTS,
                         help=f"JIRA projects to search (default: "
                              f"{' '.join(DEFAULT_PROJECTS)})")
-    parser.add_argument("--label", default=DEFAULT_LABEL,
-                        help=f"Label to filter on (default: {DEFAULT_LABEL})")
     parser.add_argument("--trigger", action="store_true",
                         help="Trigger a GitLab CI pipeline for each issue")
     parser.add_argument("--job", default="doc-pipeline",
@@ -72,10 +86,10 @@ def main():
         log.error("JIRA_SERVER, JIRA_USER, and JIRA_TOKEN env vars required.")
         sys.exit(2)
 
-    jql = build_jql(args.projects, args.label)
+    jql = build_jql(args.projects, LABEL_START)
     log.info("JQL: %s", jql)
 
-    fields = ["summary", "status", "issuetype", "priority"]
+    fields = ["summary", "status", "issuetype", "priority", "labels"]
     issues = search_issues(server, user, token, jql,
                            fields=fields, max_results=500)
 
@@ -85,6 +99,12 @@ def main():
     for issue in issues:
         f = issue.get("fields", {})
         key = issue.get("key", "")
+        labels = f.get("labels", [])
+        if LABEL_INVOKED in labels:
+            log.warning("  %-20s SKIPPED — has both %s and %s, "
+                        "remove %s to re-trigger",
+                        key, LABEL_START, LABEL_INVOKED, LABEL_INVOKED)
+            continue
         keys.append(key)
         summary = f.get("summary", "")
         status = f.get("status", {})
@@ -102,7 +122,9 @@ def main():
     log.info("Triggering %s for %d issue(s)...", args.job, len(keys))
     failed = 0
     for key in keys:
-        if not trigger_pipeline(key, args.job):
+        if trigger_pipeline(key, args.job):
+            swap_label(server, user, token, key)
+        else:
             failed += 1
 
     log.info("Triggered %d/%d pipelines", len(keys) - failed, len(keys))
