@@ -14,10 +14,12 @@ Usage:
 
 import argparse
 import logging
+import re
 import subprocess
 import sys
 
-from jira_utils import require_env, search_issues, add_labels, remove_labels
+from jira_utils import (require_env, search_issues, add_labels, remove_labels,
+                        add_comment, markdown_to_adf)
 
 log = logging.getLogger("jira_ai1st_doc_start_trigger")
 
@@ -34,6 +36,9 @@ def build_jql(projects, label):
             f'ORDER BY project ASC, key ASC')
 
 
+_WEBURL_RE = re.compile(r'weburl:\s*(\S+)')
+
+
 def trigger_pipeline(jira_key, job):
     cmd = [
         "glab", "ci", "run", "-b", "main",
@@ -43,11 +48,13 @@ def trigger_pipeline(jira_key, job):
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
-        log.info("  -> triggered %s for %s", job, jira_key)
-        return True
+        m = _WEBURL_RE.search(result.stdout)
+        url = m.group(1) if m else None
+        log.info("  -> triggered %s for %s (%s)", job, jira_key, url or "no URL")
+        return url
     log.error("  -> FAILED to trigger %s for %s: %s",
               job, jira_key, result.stderr.strip())
-    return False
+    return None
 
 
 def swap_label(server, user, token, jira_key):
@@ -122,7 +129,15 @@ def main():
     log.info("Triggering %s for %d issue(s)...", args.job, len(keys))
     failed = 0
     for key in keys:
-        if trigger_pipeline(key, args.job):
+        pipeline_url = trigger_pipeline(key, args.job)
+        if pipeline_url:
+            comment = f"Pipeline triggered: [{pipeline_url}]({pipeline_url})"
+            try:
+                add_comment(server, user, token, key,
+                            markdown_to_adf(comment))
+                log.info("  -> commented on %s", key)
+            except Exception as e:
+                log.warning("  -> comment failed for %s: %s", key, e)
             swap_label(server, user, token, key)
         else:
             failed += 1
