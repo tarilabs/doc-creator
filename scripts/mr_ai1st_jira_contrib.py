@@ -306,7 +306,7 @@ def process_mr(host, project, iid, mr_data, server, user, token, force=False):
         return False
 
     mr_url = mr_data.get("web_url", "")
-    mr_title = mr_data.get("title", "")
+    mr_title = mr_data.get("title", "").replace("[", "(").replace("]", ")")
 
     update_jira_pr_field(server, user, token, jira_key, mr_url)
 

@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from mr_ai1st_jira_contrib import extract_jira_key, process_mr
+from jira_utils import get_comments, adf_to_markdown
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -54,7 +55,7 @@ class TestProcessMR:
 
         mr_data = {
             "iid": 99,
-            "title": "docs(RHOAIENG-300): new docs",
+            "title": "[DO NOT MERGE] docs(RHOAIENG-300): new docs",
             "source_branch": "rhoaieng-300-docs",
             "description": "JIRA: RHOAIENG-300",
             "web_url": "https://gitlab.example.com/proj/-/merge_requests/99",
@@ -76,6 +77,12 @@ class TestProcessMR:
 
         strat = jira.get("RHAISTRAT-100")
         assert "ai1st-doc-contributed" in strat["fields"]["labels"]
+
+        comments = get_comments(jira.url, "admin", "admin", "RHOAIENG-300")
+        comment_md = adf_to_markdown(comments[-1]["body"])
+        assert "merge_requests/99" in comment_md
+        assert "(DO NOT MERGE)" in comment_md
+        assert "[DO NOT MERGE]" not in comment_md
 
     def test_no_jira_key_returns_false(self, jira, monkeypatch):
         mr_data = {
