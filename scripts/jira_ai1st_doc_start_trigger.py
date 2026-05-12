@@ -131,7 +131,9 @@ def main():
     for key in keys:
         pipeline_url = trigger_pipeline(key, args.job)
         if pipeline_url:
-            comment = f"Pipeline triggered: [{pipeline_url}]({pipeline_url})"
+            comment = (f"Pipeline **{args.job}** triggered: "
+                       f"[{pipeline_url}]({pipeline_url})\n\n"
+                       f"Discovered by label `{LABEL_START}`.")
             try:
                 add_comment(server, user, token, key,
                             markdown_to_adf(comment))
