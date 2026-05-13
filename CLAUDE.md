@@ -44,6 +44,10 @@ Skills must use scripts for deterministic phases and delegate to subagents for L
 
 Never expose script internals (implementation details, internal data structures, error stack traces) into agent/LLM context. When something fails, surface the failure cleanly — don't hand Claude a screwdriver to rewire the button panel. Scripts should exit with clear status codes and short error messages, not tracebacks.
 
+### The agent will copy before it reasons
+
+Agents imitate patterns they find in context — templates, example values, naming conventions — even when those patterns don't apply. Use `<placeholder>` tokens in examples instead of realistic values. Never expose a "create" template to a "revise" agent. Vague verbs like "flag," "handle," or "address" delegate design decisions the agent will resolve by copying whatever convention it finds nearby — specify the mechanism explicitly.
+
 ### Be liberal in what you accept, be conservative in what you send
 
 Cast a wide net when gathering context (JIRA issues, PRs, code). Synthesize aggressively in each phase so downstream consumers get signal, not noise. Each pipeline stage should reduce volume while preserving meaning.
@@ -71,6 +75,10 @@ When writing agents/skills: grant only the tools needed, restrict file access to
 ### Save everything — you don't know what you'll need
 
 Be considerate that the developer may not have thought about all artifacts worth saving. But don't save things for the sake of it — every saved artifact must be functional to the overall documentation goal.
+
+### Subagent prompts live on disk, not in the orchestrator's head
+
+Prompt templates belong in skill directories (`prompt-template.md`) or materialized as files by scripts (`.prompt.md` in `artifacts/`). The orchestrator fills placeholders or sends a one-line redirect — it never composes prompts from reasoning. This prevents prompt drift: an orchestrator paraphrasing from memory after context compression will give agent 1 subtly different instructions than agent 47.
 
 ### The orchestrator is a router, not a thinker
 
