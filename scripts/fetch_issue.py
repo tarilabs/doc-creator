@@ -135,7 +135,7 @@ def _fetch_attachments(attachments, issue_key, artifacts_dir, user, token):
 
 
 def _extract_urls_from_adf(adf_doc):
-    """Extract all URLs from inlineCard nodes in an ADF document."""
+    """Extract all URLs from an ADF document (inlineCards and link marks)."""
     urls = []
     if not isinstance(adf_doc, dict):
         return urls
@@ -143,6 +143,11 @@ def _extract_urls_from_adf(adf_doc):
         url = adf_doc.get("attrs", {}).get("url", "")
         if url:
             urls.append(url)
+    for mark in adf_doc.get("marks", []):
+        if mark.get("type") == "link":
+            url = mark.get("attrs", {}).get("href", "")
+            if url:
+                urls.append(url)
     for child in adf_doc.get("content", []):
         urls.extend(_extract_urls_from_adf(child))
     return urls

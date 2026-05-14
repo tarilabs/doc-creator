@@ -132,6 +132,10 @@ class TestFetchAllFrontmatter:
                 {"type": "text", "text": " "},
                 {"type": "inlineCard", "attrs": {
                     "url": "https://github.com/org/repo/pull/99"}},
+                {"type": "text", "text": "MR link",
+                 "marks": [{"type": "link", "attrs": {
+                     "href": "https://gitlab.example.com/proj/-/merge_requests/7"
+                 }}]},
             ]}],
         }
         jira.create("RHOAIENG-3001", "feat(sdk): add queue support",
@@ -147,6 +151,7 @@ class TestFetchAllFrontmatter:
         assert "git_pull_requests" in fm
         assert "https://github.com/org/repo/pull/42" in fm["git_pull_requests"]
         assert "https://github.com/org/repo/pull/99" in fm["git_pull_requests"]
+        assert "https://gitlab.example.com/proj/-/merge_requests/7" in fm["git_pull_requests"]
 
     def test_frontmatter_includes_remote_links(self, jira, art_dir):
         jira.create("RHOAIENG-3002", "Remote links test",
