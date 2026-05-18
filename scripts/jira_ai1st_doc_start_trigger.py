@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 
-from jira_utils import (require_env, search_issues, add_labels, remove_labels,
+from jira_utils import (require_env, search_issues, swap_labels,
                         add_comment, markdown_to_adf)
 
 log = logging.getLogger("jira_ai1st_doc_start_trigger")
@@ -59,8 +59,8 @@ def trigger_pipeline(jira_key, job):
 
 def swap_label(server, user, token, jira_key):
     try:
-        add_labels(server, user, token, jira_key, [LABEL_INVOKED])
-        remove_labels(server, user, token, jira_key, [LABEL_START])
+        swap_labels(server, user, token, jira_key,
+                    add=[LABEL_INVOKED], remove=[LABEL_START])
         log.info("  -> label swapped: %s → %s", LABEL_START, LABEL_INVOKED)
         return True
     except Exception as e:
