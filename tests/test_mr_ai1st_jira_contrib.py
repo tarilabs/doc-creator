@@ -7,7 +7,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from mr_ai1st_jira_contrib import extract_jira_key, process_mr
-from jira_utils import get_comments, adf_to_markdown
+from jira_utils import get_comments, get_issue, adf_to_markdown
+from fetch_issue import _extract_urls_from_adf, FIELD_GIT_PULL_REQUEST
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -83,6 +84,50 @@ class TestProcessMR:
         assert "merge_requests/99" in comment_md
         assert "(DO NOT MERGE)" in comment_md
         assert "[DO NOT MERGE]" not in comment_md
+
+    def test_linked_documented_by_issue(self, jira, monkeypatch):
+        """When the STRAT has no child CCS Epic but has a 'documented by'
+        link, the MR is appended to the linked issue directly."""
+        jira.create("RHAISTRAT-200", "Strategy with linked docs",
+                     "Strategy desc.")
+        jira.create("RHOAIENG-400", "[CCS] Docs task for strategy",
+                     "Tracking docs.", issue_type="Task")
+        jira.create("RHOAIENG-500", "Leaf task under eng",
+                     "Task desc.", parent_key="RHAISTRAT-200")
+
+        jira.link("Document", "RHAISTRAT-200", "RHOAIENG-400")
+
+        mr_data = {
+            "iid": 101,
+            "title": "[DO NOT MERGE] docs(RHOAIENG-500): linked docs",
+            "source_branch": "rhoaieng-500-docs",
+            "description": "JIRA: RHOAIENG-500",
+            "web_url": "https://gitlab.example.com/proj/-/merge_requests/101",
+            "author": {"name": "AI_FIRST_TOKEN", "username": "bot"},
+        }
+        _patch_glab(monkeypatch, mr_data)
+
+        result = process_mr(
+            "gitlab.example.com", "proj", 101, mr_data,
+            jira.url, "admin", "admin")
+        assert result is True
+
+        linked = jira.get("RHOAIENG-400")
+        assert "ai1st-doc-contributed" in linked["fields"]["labels"]
+
+        pr_adf = linked["fields"].get(FIELD_GIT_PULL_REQUEST)
+        pr_urls = _extract_urls_from_adf(pr_adf)
+        assert "https://gitlab.example.com/proj/-/merge_requests/101" in pr_urls
+
+        comments = get_comments(jira.url, "admin", "admin", "RHOAIENG-400")
+        comment_md = adf_to_markdown(comments[-1]["body"])
+        assert "merge_requests/101" in comment_md
+
+        all_children = jira.search(
+            f"parent = RHAISTRAT-200", fields="key,issuetype")
+        epic_children = [c for c in all_children
+                         if c["fields"]["issuetype"]["name"] == "Epic"]
+        assert len(epic_children) == 0, "Should NOT create a child CCS Epic"
 
     def test_no_jira_key_returns_false(self, jira, monkeypatch):
         mr_data = {

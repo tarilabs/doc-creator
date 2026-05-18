@@ -84,6 +84,9 @@ def jira(jira_emu):
         {"name": "Issue split",
          "inward_description": "is split from",
          "outward_description": "split to"},
+        {"name": "Document",
+         "inward_description": "is documented by",
+         "outward_description": "documents"},
     ]
     _orig = seed_service.LINK_TYPES
     seed_service.LINK_TYPES = _orig + [
@@ -127,6 +130,15 @@ def jira(jira_emu):
             _jira_request(jira_emu, "POST",
                           f"/rest/api/3/issue/{key}/remotelink",
                           {"object": {"url": url, "title": title}})
+
+        @staticmethod
+        def link(type_name, inward_key, outward_key):
+            """Create an issue link between two issues."""
+            _jira_request(jira_emu, "POST", "/rest/api/3/issueLink", {
+                "type": {"name": type_name},
+                "inwardIssue": {"key": inward_key},
+                "outwardIssue": {"key": outward_key},
+            })
 
         @staticmethod
         def get(key):
