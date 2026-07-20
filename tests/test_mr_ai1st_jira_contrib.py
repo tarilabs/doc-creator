@@ -1,11 +1,13 @@
 """Tests for mr_ai1st_jira_contrib.py against jira-emulator."""
 import json
 import os
+import subprocess
 import sys
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+import mr_ai1st_jira_contrib as mr_mod
 from mr_ai1st_jira_contrib import extract_jira_key, process_mr
 from jira_utils import get_comments, get_issue, adf_to_markdown
 from fetch_issue import _extract_urls_from_adf, FIELD_GIT_PULL_REQUEST
@@ -144,3 +146,86 @@ class TestProcessMR:
             "gitlab.example.com", "proj", 50, mr_data,
             jira.url, "admin", "admin")
         assert result is False
+
+
+class TestGhostUser:
+
+    def _mr_data(self, iid, author):
+        base = {
+            "iid": iid,
+            "title": f"docs(RHOAIENG-{iid}): ghost test",
+            "source_branch": f"rhoaieng-{iid}-ghost",
+            "description": f"JIRA: RHOAIENG-{iid}",
+            "web_url": f"https://gitlab.example.com/proj/-/merge_requests/{iid}",
+        }
+        if author is not None:
+            base["author"] = author
+        return base
+
+    def test_process_mr_null_author(self, jira, monkeypatch):
+        """process_mr handles ghost user (author=None) without crashing."""
+        jira.create("RHOAIENG-600", "Leaf task", "Task desc.")
+        mr_data = self._mr_data(600, author=None)
+        mr_data["author"] = None
+        _patch_glab(monkeypatch, mr_data)
+
+        result = process_mr(
+            "gitlab.example.com", "proj", 600, mr_data,
+            jira.url, "admin", "admin")
+        assert result is True
+
+        comments = get_comments(jira.url, "admin", "admin", "RHOAIENG-600")
+        comment_md = adf_to_markdown(comments[-1]["body"])
+        assert "(ghost user)" in comment_md
+
+    def test_process_mr_missing_author_key(self, jira, monkeypatch):
+        """process_mr handles missing author key without crashing."""
+        jira.create("RHOAIENG-700", "Leaf task", "Task desc.")
+        mr_data = self._mr_data(700, author=None)
+        _patch_glab(monkeypatch, mr_data)
+
+        result = process_mr(
+            "gitlab.example.com", "proj", 700, mr_data,
+            jira.url, "admin", "admin")
+        assert result is True
+
+    def test_process_mr_author_with_null_fields(self, jira, monkeypatch):
+        """process_mr handles author object with null name/username."""
+        jira.create("RHOAIENG-800", "Leaf task", "Task desc.")
+        mr_data = self._mr_data(800, author={"name": None, "username": None})
+        _patch_glab(monkeypatch, mr_data)
+
+        result = process_mr(
+            "gitlab.example.com", "proj", 800, mr_data,
+            jira.url, "admin", "admin")
+        assert result is True
+
+        comments = get_comments(jira.url, "admin", "admin", "RHOAIENG-800")
+        comment_md = adf_to_markdown(comments[-1]["body"])
+        assert "(ghost user)" in comment_md
+
+    def test_glab_mr_list_fallback_on_deleted_user(self, monkeypatch):
+        """glab_mr_list falls back to unfiltered query when author is deleted."""
+        call_log = []
+
+        def fake_run(cmd, **kwargs):
+            call_log.append(cmd[:])
+            if "--author" in cmd:
+                return subprocess.CompletedProcess(
+                    cmd, returncode=1,
+                    stdout="",
+                    stderr="Failed to find user by name: old_bot.\n")
+            return subprocess.CompletedProcess(
+                cmd, returncode=0,
+                stdout=json.dumps([{"iid": 1, "title": "test MR"}]),
+                stderr="")
+
+        monkeypatch.setattr(mr_mod.subprocess, "run", fake_run)
+
+        mrs = mr_mod.glab_mr_list("https://example.com/repo",
+                                  author="old_bot")
+        assert len(mrs) == 1
+        assert mrs[0]["iid"] == 1
+        assert len(call_log) == 2
+        assert "--author" in call_log[0]
+        assert "--author" not in call_log[1]
