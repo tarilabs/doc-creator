@@ -320,7 +320,7 @@ def find_or_create_task(server, user, token, epic_key, mr_url, mr_iid):
 
 
 def process_mr(host, project, iid, mr_data, server, user, token, force=False):
-    """Process a single MR: update JIRA, walk hierarchy, mark as processed.
+    """Process a single MR: update JIRA, walk hierarchy, mark MR as processed.
 
     Returns True on success, False on failure.
     """
@@ -331,8 +331,8 @@ def process_mr(host, project, iid, mr_data, server, user, token, force=False):
         return True
 
     author = mr_data.get("author") or {}
-    author_name = author.get("name", "") or ""
-    author_username = author.get("username", "") or ""
+    author_name = author.get("name", "")
+    author_username = author.get("username", "")
     if not author_name and not author_username:
         log.info("MR !%d has a ghost user author (deleted bot user)", iid)
     elif author_name != EXPECTED_AUTHOR:
