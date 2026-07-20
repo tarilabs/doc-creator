@@ -42,7 +42,7 @@ MR_URL_RE = re.compile(
 DOCS_REPO_URL = ("https://gitlab.cee.redhat.com/"
                   "documentation-red-hat-openshift-data-science-documentation/"
                   "openshift-ai-documentation")
-BOT_USERNAME = "project_82936_bot_de8f25c2e1ca1c33b2b507874163e1c7"
+BOT_USERNAME = "project_82936_bot_1d4a93d2a0982292a1ce3611792e537a"
 
 
 def parse_mr_url(url):
@@ -60,7 +60,16 @@ def glab_mr_list(repo_url, author=None):
         cmd.extend(["--author", author])
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        log.error("glab mr list failed: %s", result.stderr.strip())
+        stderr = result.stderr.strip()
+        if author and "Failed to find user by name" in stderr:
+            log.warning(
+                "Author '%s' not found in GitLab (deleted/ghost user). "
+                "Falling back to unfiltered scan. "
+                "The hardcoded BOT_USERNAME likely needs updating — "
+                "this usually means the project access token was refreshed "
+                "on the target site.", author)
+            return glab_mr_list(repo_url, author=None)
+        log.error("glab mr list failed: %s", stderr)
         return []
     return json.loads(result.stdout)
 
@@ -321,10 +330,12 @@ def process_mr(host, project, iid, mr_data, server, user, token, force=False):
         log.info("Already processed, skipping")
         return True
 
-    author = mr_data.get("author", {})
-    author_name = author.get("name", "")
-    author_username = author.get("username", "")
-    if author_name != EXPECTED_AUTHOR:
+    author = mr_data.get("author") or {}
+    author_name = author.get("name", "") or ""
+    author_username = author.get("username", "") or ""
+    if not author_name and not author_username:
+        log.info("MR !%d has a ghost user author (deleted bot user)", iid)
+    elif author_name != EXPECTED_AUTHOR:
         log.warning("MR author is '%s' (%s), expected '%s'",
                     author_name, author_username, EXPECTED_AUTHOR)
 
@@ -338,8 +349,12 @@ def process_mr(host, project, iid, mr_data, server, user, token, force=False):
 
     update_jira_pr_field(server, user, token, jira_key, mr_url)
 
+    if not author_name and not author_username:
+        author_label = "(ghost user)"
+    else:
+        author_label = f"{author_name} (`{author_username}`)"
     comment = (f"MR contributed: [{mr_title}]({mr_url})\n\n"
-               f"Author: {author_name} (`{author_username}`)")
+               f"Author: {author_label}")
     try:
         add_comment(server, user, token, jira_key,
                     markdown_to_adf(comment))
@@ -429,6 +444,12 @@ def main():
                  "" if author else " (all authors)")
         mrs = glab_mr_list(DOCS_REPO_URL, author=author)
         log.info("Found %d unprocessed MR(s)", len(mrs))
+
+        if not args.scan_all_authors:
+            mrs = [m for m in mrs
+                   if (m.get("author") or {}).get("name") == EXPECTED_AUTHOR]
+            log.info("After author filter: %d MR(s) from '%s'",
+                     len(mrs), EXPECTED_AUTHOR)
 
         if not mrs:
             return
